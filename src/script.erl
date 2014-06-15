@@ -1,267 +1,221 @@
 -module(script).
 
--export([run/2,
-         run/3,
-         pack/1,
-         unpack/1]).
-
 -include("ecoin.hrl").
 -include("script.hrl").
 
+-export([create_env/3,
+         run/2,
+         is_valid/1,
+         encode/1,
+         decode/1]).
+
 -record(env, {
-          stack    = [] :: list(binary()),
-          altstack = [] :: list(binary()),
-          tx            :: #tx{},
-          index         :: non_neg_integer()
+          primary   = stack:new() :: stack:stack(),
+          secondary = stack:new() :: stack:stack(),
+          tx                      :: #tx{},
+          index                   :: non_neg_integer(),
+          codesep = 0             :: non_neg_integer(),
+          script                  :: binary()
          }).
 
-%% @doc Run a script validating transaction tx, input Index
-run(Script, Tx, Index) ->
-    run(Script, #env{tx=Tx, index=Index}).
+create_env(Tx, Index, Script) ->
+    #env{tx=Tx, index=Index, script=Script}.
 
-%% @doc Run a script with given environment
 run(Script, Env) ->
-    lists:foldl(fun step/2, Env, Script).
+   lists:foldl(fun step/2, Env, Script).
 
-%% @doc Pack a script
-pack(Script) ->
-    lists:map(fun pack_op/1, Script).
+is_valid(Env) ->
+    unpack_bool(stack:peek(Env#env.primary)).
 
-%% @doc Unpack a script
-unpack(Binary) ->
-    unpack(Binary, []).
+encode(Script) ->
+    iolist_to_binary(lists:map(fun encode_op/1, Script)).
 
-%% @doc Unpack operations until no more is left
-unpack(<<>>, Acc) ->
-    lists:reverse(Acc);
-unpack(Binary0, Acc) ->
-    {Op, Binary1} = unpack_op(Binary0),
-    unpack(Binary1, [Op|Acc]).
+decode(Script) ->
+    decode(Script, 0, []).
 
-%% @doc Run a operation on a given environment
-step(_, {error, Error}) ->
-    {error, Error};
-step(op_false, #env{stack=Stack} = Env) ->
-    Env#env{stack=[pack_bool(false)|Stack]};
-step(op_true, #env{stack=Stack} = Env) ->
-    Env#env{stack=[pack_bool(true)|Stack]};
-step(op_1negate, #env{stack=Stack} = Env) ->
-    Env#env{stack=[pack_var_int(-1)|Stack]};
-step({op_n, N}, #env{stack=Stack} = Env) ->
-    Env#env{stack=[pack_var_int(N) | Stack]};
-step({op_pushdata, Data}, #env{stack=Stack} = Env) ->
-    Env#env{stack=[Data | Stack]};
-step(op_nop, Env) ->
-    Env;
-step({op_if, True, False}, #env{stack=[Cond|Stack]} = Env) ->
-    Branch = case unpack_bool(Cond) of
-                 true  -> True;
-                 false -> False
-             end,
-    run(Branch, Env#env{stack=Stack});
-step({op_notif, False, True}, #env{stack=[Cond|Stack]} = Env) ->
-    Branch = case unpack_bool(Cond) of
-                 true  -> True;
-                 false -> False
-             end,
-    run(Branch, Env#env{stack=Stack});
-step(op_verify, #env{stack=[A|Stack]} = Env) ->
-    case unpack_bool(A) of
-        true  -> Env#env{stack=Stack};
-        false -> {error, invalid}
-    end;
-step(op_return, _) ->
-    {error, invalid};
-step(op_toaltstack, #env{stack=[A|Stack], altstack=AltStack} = Env) ->
-    Env#env{stack=Stack, altstack=[A|AltStack]};
-step(op_fromaltstack, #env{stack=Stack, altstack=[A|AltStack]} = Env) ->
-    Env#env{stack=[A|Stack], altstack=AltStack};
-step(op_ifdup, #env{stack=[A|_] = Stack} = Env) ->
-    case unpack_bool(A) of
-        true  -> Env#env{stack=[A|Stack]};
-        false -> Env
-    end;
-step(op_depth, #env{stack=Stack} = Env) ->
-    Env#env{stack=[pack_var_int(length(Stack))|Stack]};
-step({op_drop, N}, #env{stack=Stack} = Env) ->
-    Env#env{stack=lists:nthtail(N, Stack)};
-step({op_dup, N}, #env{stack=Stack} = Env) ->
-    {Dups, _} = lists:split(N, Stack),
-    Env#env{stack=Dups ++ Stack};
-step(op_nip, #env{stack=[A, _|Stack]} = Env) ->
-    Env#env{stack=[A|Stack]};
-step({op_over, N}, #env{stack=Stack} = Env) ->
-    Tail = lists:nthtail(N, Stack),
-    {NewTop, _} = lists:split(N, Tail),
-    Env#env{stack=NewTop ++ Stack};
-step(op_pick, #env{stack=[N|Stack]} = Env) ->
-    Nth = lists:nth(unpack_var_int(N)+1, Stack),
-    Env#env{stack=[Nth|Stack]};
-step(op_roll, #env{stack=[N|Stack]} = Env) ->
-    {Front, [Nth|Tail]} = lists:split(unpack_var_int(N), Stack),
-    Env#env{stack=[Nth|(Front++Tail)]};
-step({op_rot, N}, #env{stack=Stack} = Env) ->
-    {Front, Tail} = lists:split(N*3, Stack),
-    {OldTop, NewTop} = lists:split(N*2, Front),
-    Top = NewTop ++ OldTop,
-    Env#env{stack=Top ++ Tail};
-step({op_swap, N}, #env{stack=Stack} = Env) ->
-    {Front, Tail} = lists:split(N*2, Stack),
-    {OldTop, NewTop} = lists:split(N, Front),
-    Top = NewTop ++ OldTop,
-    Env#env{stack=Top ++ Tail};
-step(op_tuck, #env{stack=[A,B|Stack]} = Env) ->
-    Env#env{stack=[A, B, A|Stack]};
-step(op_cat, #env{stack=[A, B|Stack]} = Env) ->
-    Env#env{stack=[<<A/binary, B/binary>>|Stack]};
-step(op_substr, #env{stack=[Size, Begin, A|Stack]} = Env) ->
-    Env#env{stack=[binary:part(A, Begin, Size)|Stack]};
-step(op_left, #env{stack=[Index, A|Stack]} = Env) ->
-    Env#env{stack=[binary:part(A, 0, Index)|Stack]};
-step(op_right, #env{stack=[Index, A|Stack]} = Env) ->
-    Size = byte_size(A) - Index - 1,
-    Env#env{stack=[binary:part(A, Index + 1, Size)|Stack]};
-step(op_size, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(byte_size(A)), A|Stack]};
-step(op_invert, #env{stack=[A|Stack]} = Env) ->
-    Size = byte_size(A) * 8,
-    <<Integer:Size>> = A,
-    Env#env{stack=[<<bnot(Integer):Size>>|Stack]};
-step(op_and, #env{stack=[A, B|Stack]} = Env) 
-  when byte_size(A) == byte_size(B) ->
-    Size = byte_size(A) * 8,
-    {<<AInt:Size>>, <<BInt:Size>>} = {A, B},
-    Env#env{stack=[<<(AInt band BInt):Size>>|Stack]};
-step(op_or, #env{stack=[A, B|Stack]} = Env) 
-  when byte_size(A) == byte_size(B) ->
-    Size = byte_size(A) * 8,
-    {<<AInt:Size>>, <<BInt:Size>>} = {A, B},
-    Env#env{stack=[<<(AInt bor BInt):Size>>|Stack]};
-step(op_xor, #env{stack=[A, B|Stack]} = Env) 
-  when byte_size(A) == byte_size(B)->
-    Size = byte_size(A) * 8,
-    {<<AInt:Size>>, <<BInt:Size>>} = {A, B},
-    Env#env{stack=[<<(AInt bxor BInt):Size>>|Stack]};
-step(op_equal, #env{stack=[A, B|Stack]} = Env) ->
-    Env#env{stack=[pack_bool(A =:= B)|Stack]};
-step(op_equalverify, Env) ->
-     step(op_verify, step(op_equal, Env));
-step(op_1add, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(unpack_var_int(A) + 1)|Stack]};
-step(op_1sub, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(unpack_var_int(A) - 1)|Stack]};
-step(op_2mul, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(unpack_var_int(A) * 2)|Stack]};
-step(op_2div, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(unpack_var_int(A) div 2)|Stack]};
-step(op_negate, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(unpack_var_int(A) * -1)|Stack]};
-step(op_abs, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_var_int(abs(unpack_var_int(A)))|Stack]};
-step(op_not, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_bool(not(unpack_bool(A)))|Stack]};
-step(op_0notequal, #env{stack=[A|Stack]} = Env) ->
-    Env#env{stack=[pack_bool(unpack_bool(A))|Stack]};
-step(op_add, #env{stack=[B, A|Stack]} = Env) ->
-    Sum = unpack_var_int(B)  + unpack_var_int(A),
-    Env#env{stack=[pack_var_int(Sum)|Stack]};
-step(op_sub, #env{stack=[B, A|Stack]} = Env) ->
-    Difference = unpack_var_int(A) - unpack_var_int(B),
-    Env#env{stack=[pack_var_int(Difference)|Stack]};
-step(op_mul, #env{stack=[B, A|Stack]} = Env) ->
-    Product = unpack_var_int(A) * unpack_var_int(B),
-    Env#env{stack=[pack_var_int(Product)|Stack]};
-step(op_div, #env{stack=[B, A|Stack]} = Env) ->
-    Quotient = unpack_var_int(A) div unpack_var_int(B),
-    Env#env{stack=[pack_var_int(Quotient)|Stack]};
-step(op_mod, #env{stack=[B, A|Stack]} = Env) ->
-    Rem = unpack_var_int(A) rem unpack_var_int(B),
-    Env#env{stack=[pack_var_int(Rem)|Stack]};
-step(op_lshift, #env{stack=[B, A|Stack]} = Env) ->
-    Sign = case unpack_var_int(A) < 0 of
-               true  -> -1;
-               false -> 1
-           end,
-    Env#env{stack=[pack_var_int((abs(A) bsl B) * Sign)|Stack]};
-step(op_rshift, #env{stack=[B, A|Stack]} = Env) ->
-    Sign = case unpack_var_int(A) < 0 of
-               true  -> -1;
-               false -> 1
-           end,
-    Env#env{stack=[pack_var_int((abs(A) bsr B) * Sign)|Stack]};
-step(op_booland, #env{stack=[B, A|Stack]} = Env) ->
-    And = unpack_bool(A) and unpack_bool(B),
-    Env#env{stack=[pack_bool(And)|Stack]};
-step(op_boolor, #env{stack=[B, A|Stack]} = Env) ->
-    Or = unpack_bool(A) or unpack_bool(B),
-    Env#env{stack=[pack_bool(Or)|Stack]};
-step(op_numequal, #env{stack=[B, A|Stack]} = Env) ->
-    Equal = unpack_var_int(A) =:= unpack_var_int(B),
-    Env#env{stack=[pack_bool(Equal)|Stack]};
-step(op_numequalverify, Env) ->
-    step(op_verify, step(op_numequal, Env));
-step(op_numnotequal, #env{stack=[B, A|Stack]} = Env) ->
-    NotEqual = not(unpack_var_int(A) =:= unpack_var_int(B)),
-    Env#env{stack=[pack_bool(NotEqual)|Stack]};
-step(op_lessthan, #env{stack=[B, A|Stack]} = Env) ->
-    LessThan = unpack_var_int(A) < unpack_var_int(B),
-    Env#env{stack=[pack_bool(LessThan)|Stack]};
-step(op_greaterthan, #env{stack=[B, A|Stack]} = Env) ->
-    GreaterThan = unpack_var_int(A) > unpack_var_int(B),
-    Env#env{stack=[pack_bool(GreaterThan)|Stack]};
-step(op_lessthanorequal, #env{stack=[B, A|Stack]} = Env) ->
-    LessThanOrEqual = unpack_var_int(A) =< unpack_var_int(B),
-    Env#env{stack=[pack_bool(LessThanOrEqual)|
+step(Op, Env) ->
+    undefined.
+
+%% @doc Transform the stack with function F
+%%      The function F needs to correctly unpack it's arguments and
+%%      return a list of new items to put on the stack
+pop_f(Stack0, F) ->
+    {arity, N} = erlang:fun_info(F, arity),
+    {Args, Stack1} = stack:pop_n(Stack0, N),
+    stack:push_n(Stack1, lists:map(fun pack/1, apply(F, Args))).
+
+push(Stack, Data) -> stack:push(Stack, pack(Data)).
+
+bool_f(F) -> fun(A) -> [F(unpack_bool(A))] end.
+bool2_f(F) -> fun(A, B) -> [F(unpack_bool(A), unpack_bool(B))] end.
+
+bitwise_f(F) ->
+    fun(A) ->
+            Size = bit_size(A),
+            <<Int:Size>> = A,
+            [<<(F(Int)):Size>>]
+    end.
+
+bitwise_f2(F) ->
+    fun(A, B) ->
+            Size = bit_size(A),
+            {<<AInt:Size>>, <<BInt:Size>>} = {A, B},
+            [<<(F(AInt, BInt)):Size>>]
+    end.
+
+int_f(F) -> fun(A) -> [F(unpack_varint(A))] end.
+int2_f(F) -> fun(A, B) -> [F(unpack_varint(A), unpack_varint(B))] end.
+int3_f(F) ->
+    fun(A, B, C) ->
+            [F(unpack_varint(A), unpack_varint(B), unpack_varint(C))]
+    end.
+
+crypto_f(HashAlgo) -> fun(A) -> crypto:hash(HashAlgo, A) end.
+
+%% @doc Run the next operation in the script, returning a new state
+stack_step(S, {push, I}) -> push(S, I);
+stack_step(S, verify) -> pop_f(S, fun(B) -> [true = unpack_bool(B)] end);
+stack_step(S, ifdup) ->
+    pop_f(S, fun(B) -> case unpack_bool(B) of
+                           true  -> [B, B];
+                           false -> [B]
+                       end
+             end);
+stack_step(S, depth) -> push(S, stack:size(S));
+stack_step(S, {drop, N}) -> element(2, stack:pop_n(S, N));
+stack_step(S, {dup, N}) -> stack:push_n(S, stack:peek_n(S, N));
+stack_step(S, nip) -> element(2, stack:pop_ix(S, 2));
+stack_step(S, {over, N}) -> stack:push_n(S, stack:peek_part(S, N*1, N));
+stack_step(S0, pick) ->
+    {N, S1} = stack:pop(S0),
+    stack:push(stack:peek_ix(unpack_varint(N), S1), S1);
+stack_step(S0, roll) ->
+    {N, S1} = stack:pop(S0),
+    {I, S2} = stack:pop_ix(S1, unpack_varint(N)),
+    stack:push(I, S2);
+stack_step(S0, {rot, N}) ->
+    {F, S1} = stack:pop_n(S0, N*3),
+    {T1, T2} = lists:split(N*2, F),
+    stack:push_n(S1, T2++T1);
+stack_step(S0, {swap, N}) ->
+    {F, S1} = stack:pop_n(S0, N*2),
+    {T1, T2} = lists:split(N, F),
+    stack:push_n(S1, T2++T1);
+stack_step(S, tuck) -> pop_f(S, fun(A,B) -> [A, B, A] end);
+stack_step(S, cat) -> pop_f(S, fun(A, B) -> [<<B/binary, A/binary>>] end);
+stack_step(S, substr) ->
+    pop_f(S, fun(Sz, B, I) ->
+                     [binary:part(I, unpack_varint(B), unpack_varint(Sz))]
+             end);
+stack_step(S, left) ->
+    pop_f(S, fun(Ix, I) -> [binary:part(I, 0, unpack_varint(Ix))] end);
+stack_step(S, right) ->
+    pop_f(S, fun(Ix, I) ->
+                     Index = unpack_varint(Ix),
+                     [binary:part(I, Index+1, byte_size(I)-Index-1)]
+          end);
+stack_step(S, size) -> push(S, byte_size(stack:peek(S)));
+stack_step(S, invert) -> pop_f(S, bitwise_f(fun(A) -> bnot A end));
+stack_step(S, 'band') -> pop_f(S, bitwise_f(fun(A, B) -> A band B end));
+stack_step(S, 'bor') -> pop_f(S, bitwise_f(fun(A, B) -> A bor B end));
+stack_step(S, 'bxor') -> pop_f(S, bitwise_f(fun(A, B) -> A bxor B end));
+stack_step(S, equal) -> pop_f(S, fun(A, B) -> [A==B] end);
+stack_step(S, add1) -> pop_f(S, int_f(fun(A) -> A+1 end)); 
+stack_step(S, sub1) -> pop_f(S, int_f(fun(A) -> A-1 end));
+stack_step(S, mul2) -> pop_f(S, int_f(fun(A) -> A*2 end));
+stack_step(S, div2) -> pop_f(S, int_f(fun(A) -> A div 2 end));
+stack_step(S, negate) -> pop_f(S,int_f(fun(A) -> A*-1 end));
+stack_step(S, abs) -> pop_f(S, int_f(fun abs/1));
+stack_step(S, 'not') -> pop_f(S, bool_f(fun(A) -> not A end));
+stack_step(S, notequal0) -> pop_f(S, bool_f(fun(A) -> A end));
+stack_step(S, add) -> pop_f(S, int2_f(fun(A, B) -> A+B end));
+stack_step(S, sub) -> pop_f(S, int2_f(fun(A, B) -> B-A end));
+stack_step(S, mul) -> pop_f(S, int2_f(fun(A, B) -> A*B end));
+stack_step(S, divide) -> pop_f(S, int2_f(fun(A, B) -> B div A end));
+stack_step(S, mod) -> pop_f(S, int2_f(fun(A, B) -> B rem A end));
+stack_step(S, lshift) ->
+    pop_f(S, int2_f(fun(A, B) -> sign(A)*(abs(A) bsl B) end));
+stack_step(S, rshift) ->
+    pop_f(S, int2_f(fun(A, B) -> sign(A)*(abs(A) bsr B) end));
+stack_step(S, 'and') -> pop_f(S, bool2_f(fun(A, B) -> A andalso B end));
+stack_step(S, 'or') -> pop_f(S, bool2_f(fun(A, B) -> A orelse B end));
+stack_step(S, num_equal) -> pop_f(S, int2_f(fun(A, B) -> A == B end));
+stack_step(S, num_notequal) -> pop_f(S, int2_f(fun(A, B) -> A /= B end));
+stack_step(S, lessthan) -> pop_f(S, int2_f(fun(A, B) -> B < A end));
+stack_step(S, greaterthan) -> pop_f(S, int2_f(fun(A, B) -> B > A end));
+stack_step(S, lessthanorequal) -> pop_f(S, int2_f(fun(A, B) -> B =< A end));
+stack_step(S, greaterthanorequal) -> pop_f(S, int2_f(fun(A, B) -> B >= A end));
+stack_step(S, min) -> pop_f(S, int2_f(fun(A, B) -> min(A, B) end));
+stack_step(S, max) -> pop_f(S, int2_f(fun(A, B) -> max(A, B) end));
+stack_step(S, within) ->
+    pop_f(S, int3_f(fun(Max, Min, X) -> X >= Min andalso X < Max end));
+stack_step(S, ripemd160) -> pop_f(S, crypto_f(ripemd160));
+stack_step(S, sha1) -> pop_f(S, crypto_f(sha1));
+stack_step(S, sha256) -> pop_f(S, crypto_f(sha256));
+stack_step(S, hash160) -> pop_f(S, fun ecoin_crypto:hash160/1);
+stack_step(S, hash256) -> pop_f(S, fun ecoin_crypto:hash256/1).
+
+sign(Int) when Int < 0 -> -1;
+sign(_)                ->  1.
+
+pack(Bool) when is_boolean(Bool) -> pack_bool(Bool);
+pack(Integer) when is_integer(Integer) -> pack_varint(Integer);
+pack(Binary) when is_binary(Binary) -> Binary.
 
 %% @doc Pack a bool as a binary
-pack_bool(true)  -> pack_var_int(1);
-pack_bool(false) -> pack_var_int(0).
+pack_bool(true)  -> <<1>>;
+pack_bool(false) -> <<>>.
 
 %% @doc Unpack a binary as a bool
-unpack_bool(Binary) ->
-    case unpack_var_int(Binary) of
+unpack_bool(Data) ->
+    case unpack_varint(Data) of
         0 -> false;
         _ -> true
     end.
 
 %% @doc Pack a variable size little endian integer
-pack_var_int(0) ->
+pack_varint(0) ->
     <<>>;
-pack_var_int(Int0) ->
-    Int1 = abs(Int0),
-    Binary0 = binary:encode_unsigned(Int1, little),
+pack_varint(Int) when Int < 0 ->
+    pack_varint(abs(Int), negative);
+pack_varint(Int) ->
+    pack_varint(Int, positive).
+
+pack_varint(UInt, Sign) ->
+    Bin0 = binary:encode_unsigned(UInt, little),
     %% Pad with an extra byte if it overflows
-    Binary1 = case binary:last(Binary0) bsr 7 of
-                  0 -> Binary0;
-                  1 -> <<Binary0/binary, 0>>
-              end,
-    case Int0 >= 0 of
-        true  ->
-           Binary1; 
-        false ->
-            Size = byte_size(Binary1) - 1,
-            <<Binary2:Size/binary, MSB>> = Binary1,
-            %% Set most significant bit
-            SignedMSB = MSB bor 16#80,
-            <<Binary2/binary, SignedMSB>>
+    case bit7(binary:last(Bin0)) of
+        one ->
+            case Sign of
+                positive -> <<Bin0/binary, 0>>;
+                negative -> <<Bin0/binary, 16#80>>
+            end;
+        zero ->
+            case Sign of
+                positive -> Bin0;
+                negative ->
+                    AllButLast = byte_size(Bin0)-1,
+                    <<AllButLastByte:AllButLast/binary, LastByte>> = Bin0,
+                    <<AllButLastByte/binary, (LastByte+16#80)>>
+            end
     end.
 
 %% @doc Unpack a variable size little endian integer
 %%      Most significant bit in last byte encodes sign,
 %%      if the number overflows, add an extra byte in front of it
-unpack_var_int(<<>>) ->
+unpack_varint(<<>>) ->
     0;
-unpack_var_int(Binary0) ->
-    Size = byte_size(Binary0) - 1,
-    <<Binary1:Size/binary, MSB>> = Binary0,
-    {Sign, Binary2}= case MSB bsr 7 of
-                         0 ->
-                             {1, Binary1};
-                         1 ->
-                             UnsignedMSB = MSB band bnot(16#80),
-                             {-1, <<Binary1/binary, UnsignedMSB>>}
-                     end,
-    Sign * binary:decode_unsigned(Binary2, little).
+unpack_varint(Bin0) when byte_size(Bin0) =< 4->
+    AllButLast = byte_size(Bin0)-1,
+    <<AllButLastByte:AllButLast/binary, LastByte0>> = Bin0,
+    {Sign, LastByte1}= case bit7(LastByte0) of
+                           one  -> {-1, LastByte0 - 16#80};
+                           zero -> {1,  LastByte0}
+                       end,
+    Sign * binary:decode_unsigned(<<AllButLastByte/binary, LastByte1>>, little).
+
+bit7(Byte) when (Byte band 16#80) == 0 -> zero;
+bit7(_)                                -> one.
 
 pack_op(Op) ->
     case Op of
@@ -382,146 +336,125 @@ pack_op_if(BranchA, BranchB) ->
      lists:map(fun pack_op/1, BranchB),
      ?OP_ENDIF].
 
-%% @doc Unpack a script operation
-unpack_op(<<Size, Binary0/binary>>) when ?OP_PUSHDATA(Size) ->
-    <<Data:Size/binary, Binary1/binary>> = Binary0,
-    {{op_pushdata, Data}, Binary1};
-unpack_op(<<Op, Binary0/binary>>) when Op == ?OP_PUSHDATA1;
-                                       Op == ?OP_PUSHDATA2;
-                                       Op == ?OP_PUSHDATA4 ->
-    SizeBits = case Op of
-                   ?OP_PUSHDATA1 -> 8;
-                   ?OP_PUSHDATA2 -> 16;
-                   ?OP_PUSHDATA4 -> 32
-               end, 
-    <<Size:SizeBits,    Binary1/binary>> = Binary0,
-    <<Data:Size/binary, Binary2/binary>> = Binary1,
-    {{op_pushdata, Data}, Binary2};
-unpack_op(<<Op, Binary0/binary>>) when Op == ?OP_IF;
-                                       Op == ?OP_NOTIF ->
-    OpIf = case Op of
-             ?OP_IF    -> op_if;
-             ?OP_NOTIF -> op_notif
-         end,
-    {BranchA, BranchB, Binary1} = unpack_op_if(Binary0),
-    {{OpIf, BranchA, BranchB}, Binary1};
-unpack_op(<<OpCode, Binary0/binary>>) ->
-    Op = case OpCode of
-             ?OP_TRUE                -> op_true;
-             ?OP_FALSE               -> op_false;
-             ?OP_1NEGATE             -> op_1negate;
-             _ when ?OP_N(OpCode)    -> {op_n, OpCode-?OP_1+1};
-             ?OP_NOP                 -> op_nop;
-             ?OP_ELSE                -> op_else;
-             ?OP_ENDIF               -> op_endif;
-             ?OP_VERIFY              -> op_verify;
-             ?OP_RETURN              -> op_return;
-             ?OP_TOALTSTACK          -> op_toaltstack;
-             ?OP_FROMALTSTACK        -> op_fromaltstack;
-             ?OP_IFDUP               -> op_ifdup;
-             ?OP_DEPTH               -> op_depth;
-             ?OP_DROP                -> {op_drop, 1};
-             ?OP_2DROP               -> {op_drop, 2};
-             ?OP_DUP                 -> {op_dup, 1};
-             ?OP_2DUP                -> {op_dup, 2};
-             ?OP_3DUP                -> {op_dup, 3};
-             ?OP_NIP                 -> op_nip;
-             ?OP_OVER                -> {op_over, 1};
-             ?OP_2OVER               -> {op_over, 2};
-             ?OP_PICK                -> op_pick;
-             ?OP_ROLL                -> op_roll;
-             ?OP_ROT                 -> {op_rot, 1};
-             ?OP_2ROT                -> {op_rot, 2};
-             ?OP_SWAP                -> {op_swap, 1};
-             ?OP_2SWAP               -> {op_swap, 2};
-             ?OP_TUCK                -> op_tuck;
-             ?OP_CAT                 -> op_cat;
-             ?OP_SUBSTR              -> op_substr;
-             ?OP_LEFT                -> op_left;
-             ?OP_RIGHT               -> op_right;
-             ?OP_SIZE                -> op_size;
-             ?OP_INVERT              -> op_invert;
-             ?OP_AND                 -> op_and;
-             ?OP_OR                  -> op_or;
-             ?OP_XOR                 -> op_xor;
-             ?OP_EQUAL               -> op_equal;
-             ?OP_EQUALVERIFY         -> op_equalverify;
-             ?OP_1ADD                -> op_1add;
-             ?OP_1SUB                -> op_1sub;
-             ?OP_2MUL                -> op_2mul;
-             ?OP_2DIV                -> op_2div;
-             ?OP_NEGATE              -> op_negate;
-             ?OP_ABS                 -> op_abs;
-             ?OP_NOT                 -> op_not;
-             ?OP_0NOTEQUAL           -> op_0notequal;
-             ?OP_ADD                 -> op_add;
-             ?OP_SUB                 -> op_sub;
-             ?OP_MUL                 -> op_mul;
-             ?OP_DIV                 -> op_div;
-             ?OP_MOD                 -> op_mod;
-             ?OP_LSHIFT              -> op_lshift;
-             ?OP_RSHIFT              -> op_rshift;
-             ?OP_BOOLAND             -> op_booland;
-             ?OP_BOOLOR              -> op_boolor;
-             ?OP_NUMEQUAL            -> op_numequal;
-             ?OP_NUMEQUALVERIFY      -> op_numequalverify;
-             ?OP_NUMNOTEQUAL         -> op_numnotequal;
-             ?OP_LESSTHAN            -> op_lessthan;
-             ?OP_GREATERTHAN         -> op_greaterthan;
-             ?OP_LESSTHANOREQUAL     -> op_lessthanorequal;
-             ?OP_GREATERTHANOREQUAL  -> op_greaterthanorequal;
-             ?OP_MIN                 -> op_min;
-             ?OP_MAX                 -> op_max;
-             ?OP_WITHIN              -> op_within;
-             ?OP_RIPEMD160           -> op_ripemd160;
-             ?OP_SHA1                -> op_sha1;
-             ?OP_SHA256              -> op_sha256;
-             ?OP_HASH160             -> op_hash160;
-             ?OP_HASH256             -> op_hash256;
-             ?OP_CODESEPARATOR       -> op_codeseparator;
-             ?OP_CHECKSIG            -> op_checksig;
-             ?OP_CHECKSIGVERIFY      -> op_checksigverify;
-             ?OP_CHECKMULTISIG       -> op_checkmultisig;
-             ?OP_CHECKMULTISIGVERIFY -> op_checkmultisigverify;
-             ?OP_PUBKEYHASH          -> op_pubkeyhash;
-             ?OP_PUBKEY              -> op_pubkey;
-             ?OP_INVALIDOPCODE       -> op_invalidopcode;
-             ?OP_RESERVED            -> op_reserved;
-             ?OP_VER                 -> op_ver;
-             ?OP_VERIF               -> op_verif;
-             ?OP_VERNOTIF            -> op_vernotif;
-             ?OP_RESERVED1           -> op_reserved1;
-             ?OP_RESERVED2           -> op_reserved2;
-             ?OP_NOP1                -> op_nop1;
-             ?OP_NOP2                -> op_nop2;
-             ?OP_NOP3                -> op_nop3;
-             ?OP_NOP4                -> op_nop4;
-             ?OP_NOP5                -> op_nop5;
-             ?OP_NOP6                -> op_nop6;
-             ?OP_NOP7                -> op_nop7;
-             ?OP_NOP8                -> op_nop8;
-             ?OP_NOP9                -> op_nop9;
-             ?OP_NOP10               -> op_nop10
-         end,
-    {Op, Binary0}.
+%% @doc Decode a script
+decode(<<>>, _, Acc) ->
+    lists:reverse(Acc);
+decode(<<?OP_CODESEPARATOR, Script/binary>>, Pos, Acc) ->
+    decode(Script, Pos+1, [{codesep, Pos}|Acc]);
+decode(<<?OP_IF, Script0/binary>>, Pos0, Acc) ->
+    {True, False, Pos1, Script1} = decode_if(Script0, Pos0),
+    decode(Script1, Pos1, [{'if', True, False}|Acc]);
+decode(<<?OP_NOTIF, Script0/binary>>, Pos0, Acc) ->
+    {False, True, Pos1, Script1} = decode_if(Script0 Pos0),
+    decode(Script1, Pos1, [{notif, False, True}|Acc]);
+decode(<<?OP_ELSE, Script/binary>>, Pos, Acc) ->
+    {else, lists:reverse(Acc), Pos+1, Script};
+decode(<<?OP_ENDIF, Script/binary>>, Pos, Acc) ->
+    {endif, lists:reverse(Acc), Pos+1, Script};
+decode(Script0, Pos, Acc) ->
+    {Op, Len, Script1} = decode_op(Script0),
+    decode(Script1, Pos+Len, [Op|Acc]).
 
-%% @doc Unpack an (not)if operation
-unpack_op_if(Binary0) ->
-    {Script,  Binary1} = unpack_until(Binary0, op_endif),
-    NotElse = fun(op_else) -> false;
-                 (_)       -> true
-              end,
-    {BranchA, [_|BranchB]} = lists:splitwith(NotElse, Script),
-    {BranchA, BranchB, Binary1}.
-
-%% @doc Unpack until a certain operation is hit,
-%%      e.g unpack until op_else
-unpack_until(Binary, Op) ->
-    unpack_until(Binary, Op, []).
-unpack_until(Binary0, Op, Acc) ->
-    case unpack_op(Binary0) of
-        {Op,  Binary1} -> {lists:reverse(Acc), Binary1};
-        {OpX, Binary1} -> unpack_until(Binary1, Op, [OpX|Acc])
+%% @doc Decode a (n)if operation
+decode_if(Script0, Pos0) ->
+    case decode(Script0, Pos0, []) of
+        {else, BranchA, Pos1, Script1} ->
+            {endif, BranchB, Pos2, Script2} ->
+                {BranchA, BranchB, Pos2, Script2};
+        {endif, BranchA, Pos1, Script1} ->
+            {BranchA, [], Pos1, Script1}
     end.
 
-
+%% @doc Decode a script operation
+decode_op(<<Size, Script0/binary>>) when ?OP_PUSHDATA(Size) ->
+    <<Data:Size/binary, Script1/binary>> = Script0,
+    {{op_pushdata, Data}, 1, Script1};
+decode_op(<<Op, Script0/binary>>) when Op == ?OP_PUSHDATA1;
+                                       Op == ?OP_PUSHDATA2;
+                                       Op == ?OP_PUSHDATA4 ->
+    SizeBytes = case Op of
+                    ?OP_PUSHDATA1 -> 1;
+                    ?OP_PUSHDATA2 -> 2;
+                    ?OP_PUSHDATA4 -> 4
+                end, 
+    SizeBits = SizeBytes * 8,
+    <<Size:SizeBits,    Script1/binary>> = Script0,
+    <<Data:Size/binary, Script2/binary>> = Script1,
+    {{op_pushdata, Data}, 1+SizeBytes+Size, Script2};
+decode_op(<<OpCode, Script/binary>>) ->
+    Op = case OpCode of
+             ?OP_TRUE                -> {push, true};
+             ?OP_FALSE               -> {push, false};
+             ?OP_1NEGATE             -> {push, -1};
+             _ when ?OP_N(OpCode)    -> {push, OpCode-?OP_1+1};
+             ?OP_NOP                 -> nop;
+             ?OP_VERIFY              -> verify;
+             ?OP_RETURN              -> return;
+             ?OP_TOALTSTACK          -> toaltstack;
+             ?OP_FROMALTSTACK        -> fromaltstack;
+             ?OP_IFDUP               -> ifdup;
+             ?OP_DEPTH               -> depth;
+             ?OP_DROP                -> {drop, 1};
+             ?OP_2DROP               -> {drop, 2};
+             ?OP_DUP                 -> {dup, 1};
+             ?OP_2DUP                -> {dup, 2};
+             ?OP_3DUP                -> {dup, 3};
+             ?OP_NIP                 -> nip;
+             ?OP_OVER                -> {over, 1};
+             ?OP_2OVER               -> {over, 2};
+             ?OP_PICK                -> pick;
+             ?OP_ROLL                -> roll;
+             ?OP_ROT                 -> {rot, 1};
+             ?OP_2ROT                -> {rot, 2};
+             ?OP_SWAP                -> {swap, 1};
+             ?OP_2SWAP               -> {swap, 2};
+             ?OP_TUCK                -> tuck;
+             ?OP_CAT                 -> cat;
+             ?OP_SUBSTR              -> substr;
+             ?OP_LEFT                -> left;
+             ?OP_RIGHT               -> right;
+             ?OP_SIZE                -> size;
+             ?OP_INVERT              -> invert;
+             ?OP_AND                 -> 'band';
+             ?OP_OR                  -> 'bor';
+             ?OP_XOR                 -> 'bxor';
+             ?OP_EQUAL               -> equal;
+             ?OP_EQUALVERIFY         -> equalverify;
+             ?OP_1ADD                -> add1;
+             ?OP_1SUB                -> sub1;
+             ?OP_2MUL                -> mul2;
+             ?OP_2DIV                -> div2;
+             ?OP_NEGATE              -> negate;
+             ?OP_ABS                 -> abs;
+             ?OP_NOT                 -> 'not';
+             ?OP_0NOTEQUAL           -> notequal0;
+             ?OP_ADD                 -> add;
+             ?OP_SUB                 -> sub;
+             ?OP_MUL                 -> mul;
+             ?OP_DIV                 -> 'div';
+             ?OP_MOD                 -> mod;
+             ?OP_LSHIFT              -> lshift;
+             ?OP_RSHIFT              -> rshift;
+             ?OP_BOOLAND             -> 'and';
+             ?OP_BOOLOR              -> 'or';
+             ?OP_NUMEQUAL            -> numequal;
+             ?OP_NUMEQUALVERIFY      -> numequalverify;
+             ?OP_NUMNOTEQUAL         -> notnumequal;
+             ?OP_LESSTHAN            -> lessthan;
+             ?OP_GREATERTHAN         -> greaterthan;
+             ?OP_LESSTHANOREQUAL     -> lessthanorequal;
+             ?OP_GREATERTHANOREQUAL  -> greaterthanorequal;
+             ?OP_MIN                 -> min;
+             ?OP_MAX                 -> max;
+             ?OP_WITHIN              -> within;
+             ?OP_RIPEMD160           -> ripemd160;
+             ?OP_SHA1                -> sha1;
+             ?OP_SHA256              -> sha256;
+             ?OP_HASH160             -> hash160;
+             ?OP_HASH256             -> hash256;
+             ?OP_CHECKSIG            -> checksig;
+             ?OP_CHECKSIGVERIFY      -> checksigverify;
+             ?OP_CHECKMULTISIG       -> checkmultisig;
+             ?OP_CHECKMULTISIGVERIFY -> checkmultisigverify
+         end,
+    {Op, 1, Script}.

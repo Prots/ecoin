@@ -69,6 +69,7 @@
              in        :: array:array(#tx_in{}),
              out       :: array:array(#tx_out{}),
              lock_time :: integer()}).
+
 %% block
 -record(block, {proto_ver   :: protocol_version(),
                 prev_block  :: hash(),
