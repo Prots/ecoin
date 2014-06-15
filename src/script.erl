@@ -340,12 +340,12 @@ pack_op_if(BranchA, BranchB) ->
 decode(<<>>, _, Acc) ->
     lists:reverse(Acc);
 decode(<<?OP_CODESEPARATOR, Script/binary>>, Pos, Acc) ->
-    decode(Script, Pos+1, [{codesep, Pos}|Acc]);
+    decode(Script, Pos+1, [{codeseparator, Pos}|Acc]);
 decode(<<?OP_IF, Script0/binary>>, Pos0, Acc) ->
-    {True, False, Pos1, Script1} = decode_if(Script0, Pos0),
+    {True, False, Pos1, Script1} = decode_if(Script0, Pos0+1),
     decode(Script1, Pos1, [{'if', True, False}|Acc]);
 decode(<<?OP_NOTIF, Script0/binary>>, Pos0, Acc) ->
-    {False, True, Pos1, Script1} = decode_if(Script0 Pos0),
+    {False, True, Pos1, Script1} = decode_if(Script0, Pos0+1),
     decode(Script1, Pos1, [{notif, False, True}|Acc]);
 decode(<<?OP_ELSE, Script/binary>>, Pos, Acc) ->
     {else, lists:reverse(Acc), Pos+1, Script};
@@ -359,8 +359,8 @@ decode(Script0, Pos, Acc) ->
 decode_if(Script0, Pos0) ->
     case decode(Script0, Pos0, []) of
         {else, BranchA, Pos1, Script1} ->
-            {endif, BranchB, Pos2, Script2} ->
-                {BranchA, BranchB, Pos2, Script2};
+             {endif, BranchB, Pos2, Script2} = decode(Script1, Pos1, []),
+             {BranchA, BranchB, Pos2, Script2};
         {endif, BranchA, Pos1, Script1} ->
             {BranchA, [], Pos1, Script1}
     end.
@@ -368,7 +368,7 @@ decode_if(Script0, Pos0) ->
 %% @doc Decode a script operation
 decode_op(<<Size, Script0/binary>>) when ?OP_PUSHDATA(Size) ->
     <<Data:Size/binary, Script1/binary>> = Script0,
-    {{op_pushdata, Data}, 1, Script1};
+    {{op_pushdata, Data}, 1+Size, Script1};
 decode_op(<<Op, Script0/binary>>) when Op == ?OP_PUSHDATA1;
                                        Op == ?OP_PUSHDATA2;
                                        Op == ?OP_PUSHDATA4 ->
@@ -387,39 +387,39 @@ decode_op(<<OpCode, Script/binary>>) ->
              ?OP_FALSE               -> {push, false};
              ?OP_1NEGATE             -> {push, -1};
              _ when ?OP_N(OpCode)    -> {push, OpCode-?OP_1+1};
-             ?OP_NOP                 -> nop;
+             ?OP_NOP                 -> noop;
              ?OP_VERIFY              -> verify;
              ?OP_RETURN              -> return;
-             ?OP_TOALTSTACK          -> toaltstack;
-             ?OP_FROMALTSTACK        -> fromaltstack;
-             ?OP_IFDUP               -> ifdup;
+             ?OP_TOALTSTACK          -> tosecondary;
+             ?OP_FROMALTSTACK        -> fromsecondary;
+             ?OP_IFDUP               -> ifduplicate;
              ?OP_DEPTH               -> depth;
              ?OP_DROP                -> {drop, 1};
              ?OP_2DROP               -> {drop, 2};
-             ?OP_DUP                 -> {dup, 1};
-             ?OP_2DUP                -> {dup, 2};
-             ?OP_3DUP                -> {dup, 3};
+             ?OP_DUP                 -> {duplicate, 1};
+             ?OP_2DUP                -> {duplicate, 2};
+             ?OP_3DUP                -> {duplicate, 3};
              ?OP_NIP                 -> nip;
              ?OP_OVER                -> {over, 1};
              ?OP_2OVER               -> {over, 2};
              ?OP_PICK                -> pick;
              ?OP_ROLL                -> roll;
-             ?OP_ROT                 -> {rot, 1};
-             ?OP_2ROT                -> {rot, 2};
+             ?OP_ROT                 -> {rotate, 1};
+             ?OP_2ROT                -> {rotate, 2};
              ?OP_SWAP                -> {swap, 1};
              ?OP_2SWAP               -> {swap, 2};
              ?OP_TUCK                -> tuck;
-             ?OP_CAT                 -> cat;
-             ?OP_SUBSTR              -> substr;
+             ?OP_CAT                 -> concatenate;
+             ?OP_SUBSTR              -> substring;
              ?OP_LEFT                -> left;
              ?OP_RIGHT               -> right;
              ?OP_SIZE                -> size;
              ?OP_INVERT              -> invert;
-             ?OP_AND                 -> 'band';
-             ?OP_OR                  -> 'bor';
-             ?OP_XOR                 -> 'bxor';
+             ?OP_AND                 -> bitwiseand;
+             ?OP_OR                  -> bitwiseor;
+             ?OP_XOR                 -> bitwisexor;
              ?OP_EQUAL               -> equal;
-             ?OP_EQUALVERIFY         -> equalverify;
+             ?OP_EQUALVERIFY         -> equal_verify;
              ?OP_1ADD                -> add1;
              ?OP_1SUB                -> sub1;
              ?OP_2MUL                -> mul2;
@@ -429,20 +429,20 @@ decode_op(<<OpCode, Script/binary>>) ->
              ?OP_NOT                 -> 'not';
              ?OP_0NOTEQUAL           -> notequal0;
              ?OP_ADD                 -> add;
-             ?OP_SUB                 -> sub;
-             ?OP_MUL                 -> mul;
-             ?OP_DIV                 -> 'div';
-             ?OP_MOD                 -> mod;
-             ?OP_LSHIFT              -> lshift;
-             ?OP_RSHIFT              -> rshift;
-             ?OP_BOOLAND             -> 'and';
-             ?OP_BOOLOR              -> 'or';
+             ?OP_SUB                 -> subtract;
+             ?OP_MUL                 -> multiply;
+             ?OP_DIV                 -> divide;
+             ?OP_MOD                 -> modulus;
+             ?OP_LSHIFT              -> leftshift;
+             ?OP_RSHIFT              -> rightshift;
+             ?OP_BOOLAND             -> booland;
+             ?OP_BOOLOR              -> boolor;
              ?OP_NUMEQUAL            -> numequal;
-             ?OP_NUMEQUALVERIFY      -> numequalverify;
              ?OP_NUMNOTEQUAL         -> notnumequal;
+             ?OP_NUMEQUALVERIFY      -> numequalverify;
              ?OP_LESSTHAN            -> lessthan;
-             ?OP_GREATERTHAN         -> greaterthan;
              ?OP_LESSTHANOREQUAL     -> lessthanorequal;
+             ?OP_GREATERTHAN         -> greaterthan;
              ?OP_GREATERTHANOREQUAL  -> greaterthanorequal;
              ?OP_MIN                 -> min;
              ?OP_MAX                 -> max;
