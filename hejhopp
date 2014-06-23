@@ -15,14 +15,14 @@
           transaction             :: tx:transaction(),
           index                   :: non_neg_integer(),
           codeseparator = 0       :: non_neg_integer(),
-          script                  :: script()
+          script                  :: binary()
          }).
 
 %% @doc Create a new environment to run a script in
 create_env(Tx, Index, Script) ->
     #env{transaction=Tx,
          index=Index,
-         script=Script}.
+         script=remove_codeseparators(Script)}.
 
 %% @doc Run a script in an environment
 run(Script, Env) ->
@@ -60,8 +60,13 @@ step(tosecondary, #env{primary=Primary0, secondary=Secondary} = Env) ->
 step(fromsecondary, #env{primary=Primary, secondary=Secondary0} = Env) ->
     {Head, Secondary1} = stack:pop(Secondary0),
     Env#env{primary=stack:push(Primary, Head), secondary=Secondary1};
-step(checksig, Env) ->
-    checksig(Env);
+step(checksig, #env{primary=Primary0, script=Script
+                    codeseparator=CS, transaction=Tx0} = Env) ->
+    {[PubKey, Sig0], Primary1} = stack:pop_n(Primary0, 2),
+    AllButLast = byte_size(Sig0) - 1,
+    <<Sig1:AllButLast, HashTypeByte>> = Sig0,
+    HashType = decode_hashtype(HashTypeByte),
+    SubScript0 = construct_subscript(Script, Sig, CS);
 step(checksigverify, Env) ->
     step(verify, step(checksig, Env));
 step(checkmultisig, _Env) ->
@@ -79,106 +84,29 @@ step_if(BranchA, BranchB, Env0) ->
              end,
     run(Branch, Env1).
 
-checksig(#env{ primary = Primary0,
-               script = Script,
-               codeseparator = CS,
-               transaction = Tx,
-               index = Ix } = Env) ->
-    {[PubKey, Sig0], Primary1} = stack:pop_n(Primary0, 2),
-    AllButLast = byte_size(Sig0) - 1,
-    <<Sig1:AllButLast, HashTypeByte>> = Sig0,
-    SubScript = subscript(Script, Sig1, CS),
-    TxCopy = txcopy(Tx, Ix, SubScript),
-    Hash = hash(TxCopy, Ix, HashTypeByte),
-    Res = crypto:verify(ecdsa, sha256, Hash, Sig1, PubKey),
-    Env#env{ primary = push(Primary1, Res) }.
+construct_subscript(Script0, Sig, CS0) ->
+    {CS1, Script1} = remove_signature(Script0, Sig, CS0),
+    {CS2, Script2} = remove_code_separators(Script1, CS1),
+    End = byte_size(Script2),
+    binary:part(Script2, CS2, End).
 
-hash(#tx{ in = Inputs, out = Outputs0 } = Tx0, Index, HashTypeByte) ->
-    [HashType | AnyOneCanPay] = decode_hashtype(HashTypeByte),
-    Tx1 = case HashType of
-              all    -> Tx0;
-              none   -> sighash_none(Tx0, Index);
-              single -> sighash_single(Tx0, Index)
-          end,
-    Tx2 = case AnyOneCanPay of
-              [] -> Tx1;
-              [anyonecanpay] -> sighash_anyonecanpay(Tx1, Index)
-          end,
-    ecoin_crypto:hash256(<<(tx:encode(Tx2))/binary, HashTypeByte:32/little>>).    
+decode_hashtype(?SIGHASH_ALL) ->
+    all;
+decode_hashtype(?SIGHASH_NONE) ->
+    none;
+decode_hashtype(?SIGHASH_SINGLE) ->
+    single;
+decode_hashtype(?SIGHASH_ANYONECANPAY) ->
+    anyonecanpay.
 
-
-sighash_none(#tx{ in = Inputs } = Tx, Index) ->
-    SigHashNone = fun (Ix, Input) when Index == Ix -> Input;
-                      (_, Input) -> Input#tx_in{ sequence = 0 }
-                  end,
-    Tx#tx{ in  = array:map(SigHashNone, Inputs), out = array:new(0) }.
-
-sighash_single(#tx{out = Outputs0} = Tx, Index) ->
-    {NewOutputList, _} = lists:split(Index, array:to_list(Outputs0)),
-    Outputs1 = array:from_list(NewOutputList),
-    SigHashSingle = fun (Ix, Output) when Index == Ix -> Output;
-                        (_, Output) -> Output#tx_out{ value = -1, script = <<>> }
-                    end,
-    Tx0#tx{ out = array:map(Blank, Outputs1) }.
-
-sighash_anyonecanpay(#tx{ in = Inputs } = Tx, Index) ->
-    Tx#tx{in=array:set(0, array:get(Index, Inputs), array:new(1))}.
-
-subscript(Script, Sig, CS0) ->
-    End = byte_size(Script),
-    SubScript = binary:part(Script, CS0, End),
-    iolist_to_binary(clean(SubScript, Sig)).
-
-txcopy(#tx{in=Inputs} = Tx, Ix, SubScript) ->
-    SetSubScript = fun(Index, Input) when Index == Ix -> Input#tx_in{script=SubScript};
-                      (_, Input) -> Input#tx_in{script = <<>>}
-                   end,
-    Tx#tx{in=array:map(SetSubScript, Inputs)}.
-
-clean(<<>>, _) ->
-    [];
-clean(<<Size, Sig:Size/binary, SubScript/binary>>, Sig) when ?OP_PUSHDATA(Size) ->
-    clean(SubScript, Sig);
-clean(<<Size, Data:Size/binary, SubScript/binary>>, Sig) when ?OP_PUSHDATA(Size) ->
-    [Size, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA1, Size, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA1, Size, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA1, Size, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA2, Size:16/little, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA2, Size:16/little, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA2, <<Size:16/little>>, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA4, Size:32/little, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA4, Size:32/little, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA4, <<Size:32/little>>, Data | clean(SubScript, Sig)];
-clean(<<?OP_CODESEPARATOR, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<Op, SubScript>>, Sig) ->
-    [Op | clean(SubScript, Sig)].
-
-decode_hashtype(HashType) ->
-    TypeInt = HashType band 31,
-    Type = case TypeInt of
-               0 -> all;
-               ?SIGHASH_ALL -> all;
-               ?SIGHASH_NONE -> none;
-               ?SIGHASH_SINGLE -> single
-           end,
-    case HashType band ?SIGHASH_ANYONECANPAY of
-        0 -> [Type];
-        ?SIGHASH_ANYONECANPAY -> [Type, anyonecanpay]
-    end.
-
-%encode_hashtype(all) ->
-    %?SIGHASH_ALL;
-%encode_hashtype(none) ->
-    %?SIGHASH_NONE;
-%encode_hashtype(single) ->
-    %?SIGHASH_SINGLE;
-%encode_hashtype(anyonecanpay) ->
-    %?SIGHASH_ANYONECANPAY.
+encode_hashtype(all) ->
+    ?SIGHASH_ALL;
+encode_hashtype(none) ->
+    ?SIGHASH_NONE;
+encode_hashtype(single) ->
+    ?SIGHASH_SINGLE;
+encode_hashtype(anyonecanpay) ->
+    ?SIGHASH_ANYONECANPAY.
 
 %% @doc Transform the stack with function F
 %%      The function F needs to correctly unpack it's arguments and
@@ -240,8 +168,8 @@ crypto_f(HashAlgo) ->
     fun(A) -> crypto:hash(HashAlgo, A) end.
 
 %% @doc Run the next operation in the script, returning a new state
-stack_step(S, {push, Item})->
-    push(S, Item);
+stack_step(S, {push, I})->
+    push(S, I);
 stack_step(S, verify) ->
     Verify = fun(true)  -> true;
                 (false) -> throw({invalid, verify})
