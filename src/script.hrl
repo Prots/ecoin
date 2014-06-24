@@ -23,7 +23,7 @@
 -define(OP_PUSHDATA1, 76).
 -define(OP_PUSHDATA2, 77).
 -define(OP_PUSHDATA4, 78).
--define(OP_PUSHDATA(Byte), Byte > 0, Byte =< ?OP_PUSHDATA1).
+-define(OP_PUSHDATA(Byte), Byte > 0, Byte < ?OP_PUSHDATA1).
 
 %% Flow
 -define(OP_NOP, 97).
@@ -133,3 +133,9 @@
 -define(OP_NOP8, 183).
 -define(OP_NOP9, 184).
 -define(OP_NOP10, 185).
+
+%% Hash types
+-define(SIGHASH_ALL, 16#00000001).
+-define(SIGHASH_NONE, 16#00000002).
+-define(SIGHASH_SINGLE, 16#00000003).
+-define(SIGHASH_ANYONECANPAY, 16#00000080).

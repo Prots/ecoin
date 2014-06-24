@@ -5,6 +5,9 @@
 
 -include("ecoin.hrl").
 
+-opaque transaction() :: #tx{}.
+-export_type([transaction/0]).
+
 %% @doc Pack a tx message
 pack(#tx{proto_ver=ProtoVer, in=TxIn, out=TxOut, lock_time=LockTime}) ->
     InCount  = protocol:pack_var_uint(length(TxIn)),

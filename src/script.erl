@@ -13,64 +13,146 @@
           primary   = stack:new() :: stack:stack(),
           secondary = stack:new() :: stack:stack(),
           transaction             :: tx:transaction(),
-          index                   :: non_neg_integer(),
-          codeseparator = 0       :: non_neg_integer(),
+          index                   :: index(),
+          codeseparator = 0       :: index(),
           script                  :: script()
          }).
 
+-type hashtype() :: all | none | single | anyonecanpay.
+-type item()  :: boolean() | integer() | binary().
+-type items() :: item() | [item()].
+-type env() :: #env{}.
+
+%% @doc A script is a list of operations.
+-type script() :: [operation()].
+
+%% @doc All operations.
+-type operation() ::
+          {'if',  script(), script()} |
+          {notif, script(), script()} |
+          nop |
+          {codeseparator, index()} | codeseparator |
+          return |
+          tosecondary |
+          fromsecondary |
+          checksignature |
+          checksignatureverify |
+          checkmultisignature |
+          checkmultisignatureverify.
+
+%% @doc An operation only touching the primary stack.
+-type stack_operation() ::
+          {push, boolean() | -1..16 | binary()} |
+          verify |
+          ifduplicate |
+          depth |
+          {drop, 1..2} |
+          {duplicate, 1..3} |
+          {over, 1..2} |
+          pick |
+          roll |
+          {rotate, 1..2} |
+          {swap, 1..2} |
+          tuck |
+          concatenate |
+          substring |
+          leftof |
+          rightof |
+          size |
+          invert |
+          bitwiseand |
+          bitwiseor |
+          bitwisexor |
+          equal |
+          increment |
+          decrement |
+          double |
+          halve |
+          negate |
+          absolutevalue |
+          'not' |
+          notequal0 |
+          add |
+          subtract |
+          multiply |
+          divide |
+          modulus |
+          leftshift |
+          rightshift |
+          booland |
+          boolor |
+          numequal |
+          notnumequal |
+          numequalverify |
+          lessthan |
+          lessthanorequal |
+          greaterthan |
+          greaterthanorequal |
+          minimum |
+          maximum |
+          within |
+          ripemd160 |
+          sha1 |
+          sha256 |
+          hash160 |
+          hash256.
+
 %% @doc Create a new environment to run a script in
-create_env(Tx, Index, Script) ->
-    #env{transaction=Tx,
-         index=Index,
-         script=Script}.
+-spec create_env(tx(), index(), binary()) -> env().
+create_env(Tx, Index, RawScript) ->
+    #env{transaction = Tx,
+         index       = Index,
+         script      = RawScript}.
 
 %% @doc Run a script in an environment
-run(Script, Env) ->
-   lists:foldl(fun step/2, Env, Script).
+-spec run(script(), env()) -> env().
+run(Script, Env) -> lists:foldl(fun step/2, Env, Script).
 
 %% @doc Check if a script ran successfully
-is_valid(Env) ->
-    unpack_bool(stack:peek(Env#env.primary)).
+-spec is_valid(env()) -> boolean().
+is_valid(Env) -> decode_bool(stack:peek(Env#env.primary)).
 
-%encode(Script) ->
-    %iolist_to_binary(lists:map(fun encode_op/1, Script)).
+%% @doc Encode a script
+%-spec encode(script()) -> binary().
+%encode(Script) -> iolist_to_binary(lists:map(fun encode_op/1, Script)).
 
 %% @doc Decode a script
-decode(Script) -> 
-    decode(Script, 0, []).
+-spec decode(binary()) -> script().
+decode(RawScript) -> decode(RawScript, 0, []).
 
-%% @doc Pop the head of the primary stack as a boolean
-pop_head_bool(#env{primary=Primary0} = Env) ->
+%% @doc Pop the head of the primary stack and decode as boolean
+-spec pop_head_bool(env()) -> {boolean(), env()}.
+pop_head_bool(#env{primary = Primary0} = Env) ->
     {Head, Primary1} = stack:pop(Primary0),
-    {unpack_bool(Head), Env#env{primary=Primary1}}.
+    {decode_bool(Head), Env#env{primary = Primary1}}.
 
-step({'if', True, False}, Env0) ->
-    step_if(True, False, Env0);
-step({notif, False, True}, Env0) ->
-    step_if(True, False, Env0);
-step(nop, Env) ->
-    Env;
-step({codeseparator, Index}, Env) ->
-    Env#env{codeseparator=Index};
-step(return, Env) ->
-    throw({invalid, return, Env});
-step(tosecondary, #env{primary=Primary0, secondary=Secondary} = Env) ->
+%% @doc Run the next step.
+%%      If-operations execute their whole branches. 
+-spec step(operation(), env()) -> env().
+step({'if', True, False}, Env0) -> step_if(True, False, Env0);
+step({notif, False, True}, Env0) -> step_if(True, False, Env0);
+step(nop, Env) -> Env;
+step({codeseparator, Index}, Env) -> Env#env{codeseparator = Index};
+step(return, _Env) -> throw({invalid, return});
+step(tosecondary, #env{primary = Primary0, secondary = Secondary} = Env) ->
     {Head, Primary1} = stack:pop(Primary0),
-    Env#env{primary=Primary1, secondary=stack:push(Secondary, Head)};
-step(fromsecondary, #env{primary=Primary, secondary=Secondary0} = Env) ->
+    Env#env{primary   = Primary1,
+            secondary = stack:push(Secondary, Head)};
+step(fromsecondary, #env{primary = Primary, secondary = Secondary0} = Env) ->
     {Head, Secondary1} = stack:pop(Secondary0),
-    Env#env{primary=stack:push(Primary, Head), secondary=Secondary1};
-step(checksig, Env) ->
-    checksig(Env);
-step(checksigverify, Env) ->
-    step(verify, step(checksig, Env));
-step(checkmultisig, _Env) ->
-    undefined;
-step(checkmultisigverify, Env) ->
-    step(verify, step(checkmultisig, Env));
-step(StackOp, #env{primary=Stack} = Env) ->
-    Env#env{primary=stack_step(Stack, StackOp)}.
+    Env#env{primary   = stack:push(Primary, Head),
+            secondary = Secondary1};
+step(checksignature, Env) -> checksignature(Env);
+step(checksignatureverify, Env) -> step(verify, step(checksignature, Env));
+step(checkmultisignature, _Env) -> undefined;
+step(checkmultisignatureverify, Env) ->
+    step(verify, step(checkmultisignature, Env));
+step(StackOp, #env{primary = Primary} = Env) ->
+    Env#env{primary = stack_step(Primary, StackOp)}.
 
+%% @doc Run an if operation.
+%%      Pop the head, if it's true run BranchA else BranchB
+-spec step_if(script(), script(), env()) -> env().
 step_if(BranchA, BranchB, Env0) ->
     {Bool, Env1} = pop_head_bool(Env0),
     Branch = case Bool of
@@ -79,21 +161,24 @@ step_if(BranchA, BranchB, Env0) ->
              end,
     run(Branch, Env1).
 
-checksig(#env{ primary = Primary0,
-               script = Script,
-               codeseparator = CS,
-               transaction = Tx,
-               index = Ix } = Env) ->
-    {[PubKey, Sig0], Primary1} = stack:pop_n(Primary0, 2),
-    AllButLast = byte_size(Sig0) - 1,
-    <<Sig1:AllButLast, HashTypeByte>> = Sig0,
-    SubScript = subscript(Script, Sig1, CS),
-    TxCopy = txcopy(Tx, Ix, SubScript),
-    Hash = hash(TxCopy, Ix, HashTypeByte),
-    Res = crypto:verify(ecdsa, sha256, Hash, Sig1, PubKey),
-    Env#env{ primary = push(Primary1, Res) }.
+%% @doc Run the checksignature operation in the current environment
+-spec checksignature(env()) -> env().
+checksignature(#env{primary = Primary0, script = Script,
+                    codeseparator = CodeSep,
+                    transaction = Tx, index = Index } = Env) ->
+    {[PublicKey, Signature0], Primary1} = stack:pop_n(Primary0, 2),
+    AllButLast = byte_size(Signature0) - 1,
+    <<Signature1:AllButLast, HashTypeByte>> = Signature0,
+    SubScript = subscript(Script, Signature1, CodeSep),
+    TxCopy = txcopy(Tx, Index, SubScript),
+    Hash = hash(TxCopy, Index, HashTypeByte),
+    Res = crypto:verify(ecdsa, sha256, Hash, Signature1, PublicKey),
+    Env#env{primary = push(Primary1, Res)}.
 
-hash(#tx{ in = Inputs, out = Outputs0 } = Tx0, Index, HashTypeByte) ->
+%% @doc Given a transaction (txcopy) an input index and a hashtype byte
+%%      compute the hash used for signature verification
+-spec hash(tx:transaction(), index(), byte()) -> binary().
+hash(Tx0, Index, HashTypeByte) ->
     [HashType | AnyOneCanPay] = decode_hashtype(HashTypeByte),
     Tx1 = case HashType of
               all    -> Tx0;
@@ -104,72 +189,100 @@ hash(#tx{ in = Inputs, out = Outputs0 } = Tx0, Index, HashTypeByte) ->
               [] -> Tx1;
               [anyonecanpay] -> sighash_anyonecanpay(Tx1, Index)
           end,
-    ecoin_crypto:hash256(<<(tx:encode(Tx2))/binary, HashTypeByte:32/little>>).    
+    ecoin_crypto:hash256([tx:encode(Tx2), <<HashTypeByte:32/little>>]).
 
-
-sighash_none(#tx{ in = Inputs } = Tx, Index) ->
-    SigHashNone = fun (Ix, Input) when Index == Ix -> Input;
-                      (_, Input) -> Input#tx_in{ sequence = 0 }
+%% @doc Transform a transaction (txcopy) according to the SIGHASH_NONE procedure
+-spec sighash_none(tx:transaction(), index()) -> tx:transaction().
+sighash_none(#tx{in = Inputs} = Tx, TopIndex) ->
+    SigHashNone = fun (Index, Input) when Index == TopIndex -> Input;
+                      (_, Input) -> Input#tx_in{sequence = 0}
                   end,
-    Tx#tx{ in  = array:map(SigHashNone, Inputs), out = array:new(0) }.
+    Tx#tx{in = array:map(SigHashNone, Inputs),
+          out = array:new(0)}.
 
-sighash_single(#tx{out = Outputs0} = Tx, Index) ->
-    {NewOutputList, _} = lists:split(Index, array:to_list(Outputs0)),
+%% @doc Transform a transaction (txcopy) according to the SIGHASH_SINGLE procedure
+-spec sighash_single(tx:transaction(), index()) -> tx:transaction().
+sighash_single(#tx{out = Outputs0} = Tx, TopIndex) ->
+    {NewOutputList, _} = lists:split(TopIndex, array:to_list(Outputs0)),
     Outputs1 = array:from_list(NewOutputList),
-    SigHashSingle = fun (Ix, Output) when Index == Ix -> Output;
-                        (_, Output) -> Output#tx_out{ value = -1, script = <<>> }
+    SigHashSingle = fun (Index, Output) when Index == TopIndex -> Output;
+                        (_, Output) -> Output#tx_out{value = -1, script = <<>>}
                     end,
-    Tx0#tx{ out = array:map(Blank, Outputs1) }.
+    Tx#tx{out = array:map(SigHashSingle, Outputs1)}.
 
-sighash_anyonecanpay(#tx{ in = Inputs } = Tx, Index) ->
-    Tx#tx{in=array:set(0, array:get(Index, Inputs), array:new(1))}.
+%% @doc Transform a transaction (txcopy) according to the SIGHASH_ANYONECANPAY
+%%      procedure.
+-spec sighash_anyonecanpay(tx:transaction(), index()) -> tx:transaction().
+sighash_anyonecanpay(#tx{in = Inputs} = Tx, Index) ->
+    Tx#tx{in = array:set(0, array:get(Index, Inputs), array:new(1))}.
 
-subscript(Script, Sig, CS0) ->
-    End = byte_size(Script),
-    SubScript = binary:part(Script, CS0, End),
-    iolist_to_binary(clean(SubScript, Sig)).
+%% @doc Create a subscript given a raw script, a signature and the index to the
+%%      last code separator
+-spec subscript(binary(), binary(), index()) -> binary().
+subscript(Script, Signature, CodeSep) ->
+    SubScript = binary:part(Script, CodeSep, byte_size(Script)),
+    iolist_to_binary(normalize_subscript(SubScript, Signature)).
 
-txcopy(#tx{in=Inputs} = Tx, Ix, SubScript) ->
-    SetSubScript = fun(Index, Input) when Index == Ix -> Input#tx_in{script=SubScript};
-                      (_, Input) -> Input#tx_in{script = <<>>}
+%% @doc Create a new transaction from an old one where all the
+%%      input scripts are set to an empty script except for the one
+%%      with the given index. That one is set to the given subscript.
+-spec txcopy(tx:transaction(), index(), binary()) -> tx:transaction().
+txcopy(#tx{in = Inputs} = Tx, IndexTop, SubScript) ->
+    SetSubScript = fun (Index, Input) when Index == IndexTop ->
+                           Input#tx_in{script = SubScript};
+                       (_, Input) -> Input#tx_in{script = <<>>}
                    end,
-    Tx#tx{in=array:map(SetSubScript, Inputs)}.
+    Tx#tx{in = array:map(SetSubScript, Inputs)}.
 
-clean(<<>>, _) ->
-    [];
-clean(<<Size, Sig:Size/binary, SubScript/binary>>, Sig) when ?OP_PUSHDATA(Size) ->
-    clean(SubScript, Sig);
-clean(<<Size, Data:Size/binary, SubScript/binary>>, Sig) when ?OP_PUSHDATA(Size) ->
-    [Size, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA1, Size, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA1, Size, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA1, Size, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA2, Size:16/little, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA2, Size:16/little, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA2, <<Size:16/little>>, Data | clean(SubScript, Sig)];
-clean(<<?OP_PUSHDATA4, Size:32/little, Sig:Size/binary, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<?OP_PUSHDATA4, Size:32/little, Data:Size/binary, SubScript/binary>>, Sig) ->
-    [?OP_PUSHDATA4, <<Size:32/little>>, Data | clean(SubScript, Sig)];
-clean(<<?OP_CODESEPARATOR, SubScript/binary>>, Sig) ->
-    clean(SubScript, Sig);
-clean(<<Op, SubScript>>, Sig) ->
-    [Op | clean(SubScript, Sig)].
+%% @doc Normalize subscript.
+%%      Remove all traces of the signature and all code separators
+-spec normalize_subscript(binary(), binary()) -> iolist().
+normalize_subscript(<<>>, _) -> [];
+normalize_subscript(<<Size, Signature:Size/binary,
+                      SubScript/binary>>,Signature) when ?OP_PUSHDATA(Size) ->
+    normalize_subscript(SubScript, Signature);
+normalize_subscript(<<Size, Data:Size/binary,
+                      SubScript/binary>>, Signature) when ?OP_PUSHDATA(Size) ->
+    [Size, Data | normalize_subscript(SubScript, Signature)];
+normalize_subscript(<<?OP_PUSHDATA1, Size, Signature:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    normalize_subscript(SubScript, Signature);
+normalize_subscript(<<?OP_PUSHDATA1, Size, Data:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    [?OP_PUSHDATA1, Size, Data | normalize_subscript(SubScript, Signature)];
+normalize_subscript(<<?OP_PUSHDATA2, Size:16/little, Signature:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    normalize_subscript(SubScript, Signature);
+normalize_subscript(<<?OP_PUSHDATA2, Size:16/little, Data:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    [?OP_PUSHDATA2, <<Size:16/little>>, Data
+     | normalize_subscript(SubScript, Signature)];
+normalize_subscript(<<?OP_PUSHDATA4, Size:32/little, Signature:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    normalize_subscript(SubScript, Signature);
+normalize_subscript(<<?OP_PUSHDATA4, Size:32/little, Data:Size/binary,
+                      SubScript/binary>>, Signature) ->
+    [?OP_PUSHDATA4, <<Size:32/little>>, Data
+     | normalize_subscript(SubScript, Signature)];
+normalize_subscript(<<?OP_CODESEPARATOR, SubScript/binary>>, Signature) ->
+    normalize_subscript(SubScript, Signature);
+normalize_subscript(<<Operation, SubScript>>, Signature) ->
+    [Operation | normalize_subscript(SubScript, Signature)].
 
-decode_hashtype(HashType) ->
-    TypeInt = HashType band 31,
-    Type = case TypeInt of
-               0 -> all;
-               ?SIGHASH_ALL -> all;
-               ?SIGHASH_NONE -> none;
-               ?SIGHASH_SINGLE -> single
-           end,
-    case HashType band ?SIGHASH_ANYONECANPAY of
-        0 -> [Type];
-        ?SIGHASH_ANYONECANPAY -> [Type, anyonecanpay]
-    end.
+%% @doc Decode the hashtype byte.
+%%      Returns a list of one or two elements.
+%%      The first being either all, none or single.
+%%      The second if it exists is anyonecanpay.
+-spec decode_hashtype(byte()) -> [hashtype()].
+decode_hashtype(HashTypeByte) ->
+    TypeInt = HashTypeByte band 31,
+    HashType = case TypeInt of
+                   0               -> all;
+                   ?SIGHASH_ALL    -> all;
+                   ?SIGHASH_NONE   -> none;
+                   ?SIGHASH_SINGLE -> single
+               end,
+    [HashType, [anyonecanpay || HashTypeByte band ?SIGHASH_ANYONECANPAY /= 0]].
 
 %encode_hashtype(all) ->
     %?SIGHASH_ALL;
@@ -183,18 +296,23 @@ decode_hashtype(HashType) ->
 %% @doc Transform the stack with function F
 %%      The function F needs to correctly unpack it's arguments and
 %%      return a list of new items to put on the stack
-pop_f(Stack0, F) ->
-    {arity, N} = erlang:fun_info(F, arity),
-    {Args, Stack1} = stack:pop_n(Stack0, N),
-    case apply(F, Args) of
-        Res when is_list(Res) -> 
-            stack:push_n(Stack1, lists:map(fun pack/1, Res));
-        Res ->
-            push(Stack1, Res)
+pop_f(Stack0, Fun) ->
+    {arity, NArgs} = erlang:fun_info(Fun, arity),
+    try stack:pop_n(Stack0, NArgs) of
+        {Args, Stack1} ->
+            case apply(Fun, Args) of
+                Result when is_list(Result) -> 
+                    EncodedResult = lists:map(fun encode_value/1, Result),
+                    stack:push_n(Stack1, EncodedResult);
+                Result ->
+                    push(Stack1, Result)
+            end
+    catch
+        throw:stack_empty -> throw({invalid, too_few_arguments})
     end.
 
 push(Stack, Data) ->
-    stack:push(Stack, pack(Data)).
+    stack:push(Stack, encode_value(Data)).
 
 bitwise_f(F) ->
     {arity, N} = erlang:fun_info(F, arity),
@@ -219,58 +337,66 @@ bitwise2_f(F) ->
 
 type_fun(Type, F) ->
     {arity, N} = erlang:fun_info(F, arity),
-    type_fun(Type, N, F).
+    Decode = case Type of
+                 bool   -> fun decode_bool/1;
+                 varint -> fun decode_varint/1
+             end,
+    type_fun(Decode, N, F).
 
-type_fun(Type, 1, F) ->
-    fun(A) -> F(unpack(Type, A)) end;
-type_fun(Type, 2, F) ->
-    fun(A, B) -> F(unpack(Type, B), unpack(Type, A)) end;
-type_fun(Type, 3, F) ->
-    fun(A, B, C) ->
-            F(unpack(Type, C), unpack(Type, B), unpack(Type, A))
-    end.
+%% @doc Given an arity(1, 2 or 3), a decode function and the function
+%%      construct a new function that decodes it's argument and pipes
+%%      the them to the given function.
+-spec type_fun(fun ((binary()) -> item()), 1..3, fun ((...) -> items())) ->
+          fun ((...) -> items()).
+type_fun(Decode, 1, F) -> fun (A)       -> F(Decode(A)) end;
+type_fun(Decode, 2, F) -> fun (A, B)    -> F(Decode(B), Decode(A)) end;
+type_fun(Decode, 3, F) -> fun (A, B, C) -> F(Decode(C), Decode(B), Decode(A)) end.
 
-bool_f(F) ->
-    type_fun(bool, F).
+%% @doc Return a function that decodes it's arguments as booleans.
+%%      The given function should return a list of items.
+%%      Works for arity 1, 2 and 3.
+-spec bool_f(fun ((...) -> items())) -> fun ((...) -> items()).
+bool_f(F) -> type_fun(fun decode_bool/1, F).
 
-int_f(F) ->
-    type_fun(varint, F).
+%% @doc Return a function that decodes it's arguments as varints.
+%%      The given function should return a list of items.
+%%      Works for functions of arity 1, 2 and 3. 
+-spec int_f(fun ((...) -> items())) -> fun ((...) -> items()).
+int_f(F) -> type_fun(fun decode_varint/1, F).
 
+%% @doc Return a function given the input hash algorithm
+-spec crypto_f(sha1 | sha256 | ripemd160) -> fun ((binary()) -> binary()).
 crypto_f(HashAlgo) ->
     fun(A) -> crypto:hash(HashAlgo, A) end.
 
 %% @doc Run the next operation in the script, returning a new state
+-spec stack_step(stack:stack(), stack_operation()) -> stack:stack().
 stack_step(S, {push, Item})->
     push(S, Item);
 stack_step(S, verify) ->
-    Verify = fun(true)  -> true;
-                (false) -> throw({invalid, verify})
+    Verify = fun (true)  -> true;
+                 (false) -> throw({invalid, verify})
              end,
     pop_f(S, bool_f(Verify));
 stack_step(S, ifduplicate) ->
-    IfDuplicate = fun(B) ->
-                          case unpack(bool, B) of
+    IfDuplicate = fun (B) ->
+                          case decode_bool(B) of
                               true  -> [B, B];
                               false -> B
                           end
                   end,
     pop_f(S, IfDuplicate);
-stack_step(S, depth) ->
-    push(S, stack:size(S));
-stack_step(S, {drop, N}) ->
-    element(2, stack:pop_n(S, N));
-stack_step(S, {duplicate, N}) ->
-    stack:push_n(S, stack:peek_n(S, N));
-stack_step(S, nip) ->
-    element(2, stack:pop_ix(S, 2));
-stack_step(S, {over, N}) ->
-    stack:push_n(S, stack:peek_part(S, N*1, N));
+stack_step(S, depth) -> push(S, stack:size(S));
+stack_step(S, {drop, N}) -> element(2, stack:pop_n(S, N));
+stack_step(S, {duplicate, N}) -> stack:push_n(S, stack:peek_n(S, N));
+stack_step(S, nip) -> element(2, stack:pop_ix(S, 2));
+stack_step(S, {over, N}) -> stack:push_n(S, stack:peek_part(S, N*1, N));
 stack_step(S0, pick) ->
     {N, S1} = stack:pop(S0),
-    stack:push(stack:peek_ix(unpack(varint, N), S1), S1);
+    stack:push(stack:peek_ix(decode_varint(N), S1), S1);
 stack_step(S0, roll) ->
     {N, S1} = stack:pop(S0),
-    {I, S2} = stack:pop_ix(S1, unpack(varint, N)),
+    {I, S2} = stack:pop_ix(S1, decode_varint(N)),
     stack:push(I, S2);
 stack_step(S0, {rotate, N}) ->
     {F, S1} = stack:pop_n(S0, N*3),
@@ -280,123 +406,105 @@ stack_step(S0, {swap, N}) ->
     {F, S1} = stack:pop_n(S0, N*2),
     {T1, T2} = lists:split(N, F),
     stack:push_n(S1, T2++T1);
-stack_step(S, tuck) ->
-    pop_f(S, fun(A,B) -> [A, B, A] end);
-stack_step(S, concatenate) ->
-    Concatenate = fun(A, B) -> <<B/binary, A/binary>> end,
-    pop_f(S, Concatenate);
-stack_step(S, substring) ->
-    SubString = fun(Size, Begin, Binary) ->
-                        binary:part(Binary,
-                                    unpack(varint, Begin),
-                                    unpack(varint, Size))
-                end,
-    pop_f(S, SubString);
-stack_step(S, leftof) ->
-    LeftOf = fun(Index, Binary) ->
-                     binary:part(Binary, 0, unpack(varint, Index))
-             end,
-    pop_f(S, LeftOf);
-stack_step(S, rightof) ->
-    RightOf = fun(Index, Binary) ->
-                     Ix = unpack_varint(Index),
-                     binary:part(Binary, Ix+1, byte_size(Binary)-Ix-1)
-              end,
-    pop_f(S, RightOf);
-stack_step(S, size) ->
-    push(S, byte_size(stack:peek(S)));
-stack_step(S, invert) ->
-    pop_f(S, bitwise_f(fun erlang:'bnot'/1));
-stack_step(S, bitwiseand) ->
-    pop_f(S, bitwise_f(fun erlang:'band'/2));
-stack_step(S, bitwiseor) ->
-    pop_f(S, bitwise_f(fun erlang:'bor'/2));
-stack_step(S, bitwisexor) ->
-    pop_f(S, bitwise_f(fun erlang:'bxor'/2));
-stack_step(S, equal) ->
-    pop_f(S, fun erlang:'=:='/2);
-stack_step(S, increment) ->
-    Increment = fun(A) -> A+1 end,
-    pop_f(S, int_f(Increment)); 
-stack_step(S, decrement) ->
-    Decrement = fun(A) -> A-1 end,
-    pop_f(S, int_f(Decrement));
-stack_step(S, double) ->
-    Double = fun(A) -> A*2 end,
-    pop_f(S, int_f(Double));
-stack_step(S, halve) ->
-    Halve = fun(A) -> A div 2 end,
-    pop_f(S, int_f(Halve));
-stack_step(S, negate) ->
-    Negate = fun(A) -> A*-1 end,
-    pop_f(S,int_f(Negate));
-stack_step(S, absolutevalue) ->
-    pop_f(S, int_f(fun abs/1));
-stack_step(S, 'not') ->
-    pop_f(S, bool_f(fun erlang:'not'/1));
-stack_step(S, notequal0) ->
-    NotEqual0 = fun(A) -> A end,
-    pop_f(S, bool_f(NotEqual0));
-stack_step(S, add) ->
-    pop_f(S, int_f(fun erlang:'+'/2));
-stack_step(S, subtract) ->
-    pop_f(S, int_f(fun(A, B) -> B-A end));
-stack_step(S, multiply) -> pop_f(S, int_f(fun(A, B) -> A*B end));
-stack_step(S, divide) -> pop_f(S, int_f(fun(A, B) -> B div A end));
-stack_step(S, modulus) -> pop_f(S, int_f(fun(A, B) -> B rem A end));
-stack_step(S, leftshift) ->
-    pop_f(S, int_f(fun(A, B) -> sign(A)*(abs(A) bsl B) end));
-stack_step(S, rightshift) ->
-    pop_f(S, int_f(fun(A, B) -> sign(A)*(abs(A) bsr B) end));
-stack_step(S, booland) -> pop_f(S, bool_f(fun(A, B) -> A andalso B end));
-stack_step(S, boolor) -> pop_f(S, bool_f(fun(A, B) -> A orelse B end));
-stack_step(S, numequal) -> pop_f(S, int_f(fun(A, B) -> A == B end));
-stack_step(S, notnumequal) -> pop_f(S, int_f(fun(A, B) -> A /= B end));
+stack_step(S, tuck) -> pop_f(S, fun (A,B) -> [A, B, A] end);
+stack_step(_S, concatenate) -> throw({invalid, {disabled, concatenate}});
+    %Concatenate = fun (A, B) -> <<B/binary, A/binary>> end,
+    %pop_f(S, Concatenate);
+stack_step(_S, substring) -> throw({invalid, {disabled, substring}});
+    %SubString = fun (Size, Begin, Binary) ->
+                    %binary:part(Binary,
+                                %decode_varint(Begin),
+                                %decode_varint(Size))
+                %end,
+    %pop_f(S, SubString);
+stack_step(_S, leftof) -> throw({invalid, {disabled, leftof}});
+    %LeftOf = fun (Index, Binary) ->
+                 %binary:part(Binary, 0, decode_varint(Index))
+             %end,
+    %pop_f(S, LeftOf);
+stack_step(_S, rightof) -> throw({invalid, {disabled, rightof}});
+    %RightOf = fun(Index, Binary) ->
+                     %Ix = decode_varint(Index),
+                     %binary:part(Binary, Ix+1, byte_size(Binary)-Ix-1)
+              %end,
+    %pop_f(S, RightOf);
+stack_step(S, size) -> push(S, byte_size(stack:peek(S)));
+stack_step(_S, invert) -> throw({invalid, {disabled, invert}});
+%pop_f(S, bitwise_f(fun erlang:'bnot'/1));
+stack_step(_S, bitwiseand) -> throw({invalid, {disabled, bitwiseand}});
+%pop_f(S, bitwise_f(fun erlang:'band'/2));
+stack_step(_S, bitwiseor) -> throw({invalid, {disabled, bitwiseor}});
+%pop_f(S, bitwise_f(fun erlang:'bor'/2));
+stack_step(_S, bitwisexor) -> throw({invalid, {disabled, bitwisexor}});
+%pop_f(S, bitwise_f(fun erlang:'bxor'/2));
+stack_step(S, equal) -> pop_f(S, fun erlang:'=:='/2);
+stack_step(S, increment) -> pop_f(S, int_f(fun (A) -> A+1 end)); 
+stack_step(S, decrement) -> pop_f(S, int_f(fun (A) -> A-1 end));
+stack_step(_S, double) -> throw({invalid, {disabled, double}});
+%pop_f(S, int_f(fun (A) -> A*2 end));
+stack_step(_S, halve) -> throw({invalid, {disabled, halve}});
+%pop_f(S, int_f(fun (A) -> A div 2 end));
+stack_step(S, negate) -> pop_f(S,int_f(fun (A) -> A*-1 end));
+stack_step(S, absolutevalue) -> pop_f(S, int_f(fun abs/1));
+stack_step(S, 'not') -> pop_f(S, bool_f(fun erlang:'not'/1));
+stack_step(S, notequal0) -> pop_f(S, bool_f(fun (A) -> A end));
+stack_step(S, add) -> pop_f(S, int_f(fun erlang:'+'/2));
+stack_step(S, subtract) -> pop_f(S, int_f(fun (A, B) -> B-A end));
+stack_step(_S, multiply) -> throw({invalid, {disabled, multiply}});
+%pop_f(S, int_f(fun(A, B) -> A*B end));
+stack_step(_S, divide) -> throw({invalid, {disabled, divide}});
+%pop_f(S, int_f(fun (A, B) -> B div A end));
+stack_step(_S, modulus) -> throw({invalid, {disabled, modulus}});
+%pop_f(S, int_f(fun (A, B) -> B rem A end));
+stack_step(_S, leftshift) -> throw({invalid, {disabled, leftshift}});
+%pop_f(S, int_f(fun(A, B) -> sign(A)*(abs(A) bsl B) end));
+stack_step(_S, rightshift) -> throw({invalid, {disabled, rightshift}});
+%pop_f(S, int_f(fun(A, B) -> sign(A)*(abs(A) bsr B) end));
+stack_step(S, booland) -> pop_f(S, bool_f(fun (A, B) -> A andalso B end));
+stack_step(S, boolor) -> pop_f(S, bool_f(fun (A, B) -> A orelse B end));
+stack_step(S, numequal) -> pop_f(S, int_f(fun (A, B) -> A == B end));
+stack_step(S, notnumequal) -> pop_f(S, int_f(fun (A, B) -> A /= B end));
 stack_step(S, numequalverify) -> stack_step(stack_step(S, numequal), verify);
-stack_step(S, lessthan) -> pop_f(S, int_f(fun(A, B) -> B < A end));
-stack_step(S, lessthanorequal) -> pop_f(S, int_f(fun(A, B) -> B =< A end));
-stack_step(S, greaterthan) -> pop_f(S, int_f(fun(A, B) -> B > A end));
-stack_step(S, greaterthanorequal) -> pop_f(S, int_f(fun(A, B) -> B >= A end));
-stack_step(S, min) -> pop_f(S, int_f(fun(A, B) -> min(A, B) end));
-stack_step(S, max) -> pop_f(S, int_f(fun(A, B) -> max(A, B) end));
-stack_step(S, within) ->
-    pop_f(S, int_f(fun(Max, Min, X) -> X >= Min andalso X < Max end));
+stack_step(S, lessthan) -> pop_f(S, int_f(fun (A, B) -> B < A end));
+stack_step(S, lessthanorequal) -> pop_f(S, int_f(fun (A, B) -> B =< A end));
+stack_step(S, greaterthan) -> pop_f(S, int_f(fun (A, B) -> B > A end));
+stack_step(S, greaterthanorequal) -> pop_f(S, int_f(fun (A, B) -> B >= A end));
+stack_step(S, minimum) -> pop_f(S, int_f(fun (A, B) -> min(A, B) end));
+stack_step(S, maximum) -> pop_f(S, int_f(fun (A, B) -> max(A, B) end));
+stack_step(S, within) -> pop_f(S, int_f(fun (Max, Min, X) -> X >= Min andalso X < Max end));
 stack_step(S, ripemd160) -> pop_f(S, crypto_f(ripemd160));
 stack_step(S, sha1) -> pop_f(S, crypto_f(sha1));
 stack_step(S, sha256) -> pop_f(S, crypto_f(sha256));
 stack_step(S, hash160) -> pop_f(S, fun ecoin_crypto:hash160/1);
 stack_step(S, hash256) -> pop_f(S, fun ecoin_crypto:hash256/1).
 
-sign(Int) when Int < 0 -> -1;
-sign(_)                ->  1.
+%% @doc Return the sign
+-spec sign(integer()) -> integer().
+sign(Integer) when Integer < 0 -> -1;
+sign(_)                        ->  1.
 
-pack(Bool) when is_boolean(Bool) -> pack_bool(Bool);
-pack(Integer) when is_integer(Integer) -> pack_varint(Integer);
-pack(Binary) when is_binary(Binary) -> Binary.
+%% @doc Encode a value
+-spec encode_value(boolean() | integer() | binary()) -> binary().
+encode_value(Boolean) when is_boolean(Boolean) -> encode_bool(Boolean);
+encode_value(Integer) when is_integer(Integer) -> encode_varint(Integer);
+encode_value(Binary)  when is_binary(Binary)   -> Binary.
 
-unpack(bool, Bool) -> unpack_bool(Bool);
-unpack(varint, VarInt) -> unpack_varint(VarInt).
+%% @doc Encode a bool as a binary
+-spec encode_bool(boolean()) -> binary().
+encode_bool(true)  -> <<1>>;
+encode_bool(false) -> <<>>.
 
-%% @doc Pack a bool as a binary
-pack_bool(true)  -> <<1>>;
-pack_bool(false) -> <<>>.
 
-%% @doc Unpack a binary as a bool
-unpack_bool(Data) ->
-    case unpack_varint(Data) of
-        0 -> false;
-        _ -> true
-    end.
-
-%% @doc Pack a variable size little endian integer
-pack_varint(0) ->
+%% @doc Encode a variable size little endian integer
+-spec encode_varint(integer()) -> binary().
+encode_varint(0) ->
     <<>>;
-pack_varint(Int) when Int < 0 ->
-    pack_varint(abs(Int), negative);
-pack_varint(Int) ->
-    pack_varint(Int, positive).
+encode_varint(Int) when Int < 0 ->
+    encode_varint(abs(Int), negative);
+encode_varint(Int) ->
+    encode_varint(Int, positive).
 
-pack_varint(UInt, Sign) ->
+encode_varint(UInt, Sign) ->
     Bin0 = binary:encode_unsigned(UInt, little),
     %% Pad with an extra byte if it overflows
     case bit7(binary:last(Bin0)) of
@@ -415,22 +523,30 @@ pack_varint(UInt, Sign) ->
             end
     end.
 
-%% @doc Unpack a variable size little endian integer
+%% @doc Decode a binary as a bool
+-spec decode_bool(binary()) -> binary().
+decode_bool(Data) -> decode_varint(Data) /= 0.
+
+%% @doc Decode a variable size little endian integer
 %%      Most significant bit in last byte encodes sign,
 %%      if the number overflows, add an extra byte in front of it
-unpack_varint(<<>>) ->
+-spec decode_varint(binary()) -> integer().
+decode_varint(<<>>) ->
     0;
-unpack_varint(Bin0) when byte_size(Bin0) =< 4->
+decode_varint(Bin0) when byte_size(Bin0) =< 4->
     AllButLast = byte_size(Bin0)-1,
     <<AllButLastByte:AllButLast/binary, LastByte0>> = Bin0,
     {Sign, LastByte1}= case bit7(LastByte0) of
-                           one  -> {-1, LastByte0 - 16#80};
-                           zero -> {1,  LastByte0}
+                           true  -> {-1, LastByte0 - 16#80};
+                           false -> {1,  LastByte0}
                        end,
-    Sign * binary:decode_unsigned(<<AllButLastByte/binary, LastByte1>>, little).
+    Sign * binary:decode_unsigned(<<AllButLastByte/binary, LastByte1>>, little);
+decode_varint(_) ->
+    {invalid, overflow}.
 
-bit7(Byte) when (Byte band 16#80) == 0 -> zero;
-bit7(_)                                -> one.
+%% @doc Get bit 7
+-spec bit7(byte()) -> boolean().
+bit7(Byte) -> Byte band 16#80 == 16#80.
 
 %pack_op(Op) ->
     %case Op of
@@ -630,32 +746,32 @@ decode_op(<<OpCode, Script/binary>>) ->
              ?OP_SWAP                -> {swap, 1};
              ?OP_2SWAP               -> {swap, 2};
              ?OP_TUCK                -> tuck;
-             ?OP_CAT                 -> concatenate;
-             ?OP_SUBSTR              -> substring;
-             ?OP_LEFT                -> leftof;
-             ?OP_RIGHT               -> rightof;
+             ?OP_CAT                 -> throw({invalid, {disabled, concatenate}});
+             ?OP_SUBSTR              -> throw({invalid, {disabled, substring}});
+             ?OP_LEFT                -> throw({invalid, {disabled, leftof}});
+             ?OP_RIGHT               -> throw({invalid, {disabled, rightof}});
              ?OP_SIZE                -> size;
-             ?OP_INVERT              -> invert;
-             ?OP_AND                 -> bitwiseand;
-             ?OP_OR                  -> bitwiseor;
-             ?OP_XOR                 -> bitwisexor;
+             ?OP_INVERT              -> throw({invalid, {disabled, invert}});
+             ?OP_AND                 -> throw({invalid, {disabled, bitwiseand}});
+             ?OP_OR                  -> throw({invalid, {disabled, bitwiseor}});
+             ?OP_XOR                 -> throw({invalid, {disabled, bitwisexor}});
              ?OP_EQUAL               -> equal;
              ?OP_EQUALVERIFY         -> equalverify;
              ?OP_1ADD                -> increment;
              ?OP_1SUB                -> decrement;
-             ?OP_2MUL                -> double;
-             ?OP_2DIV                -> halve;
+             ?OP_2MUL                -> throw({invalid, {disabled, double}});
+             ?OP_2DIV                -> throw({invalid, {disabled, halve}});
              ?OP_NEGATE              -> negate;
              ?OP_ABS                 -> absolutevalue;
              ?OP_NOT                 -> 'not';
              ?OP_0NOTEQUAL           -> notequal0;
              ?OP_ADD                 -> add;
              ?OP_SUB                 -> subtract;
-             ?OP_MUL                 -> multiply;
-             ?OP_DIV                 -> divide;
-             ?OP_MOD                 -> modulus;
-             ?OP_LSHIFT              -> leftshift;
-             ?OP_RSHIFT              -> rightshift;
+             ?OP_MUL                 -> throw({invalid, {disabled, multiply}});
+             ?OP_DIV                 -> throw({invalid, {disabled, divide}});
+             ?OP_MOD                 -> throw({invalid, {disabled, modulus}});
+             ?OP_LSHIFT              -> throw({invalid, {disabled, leftshift}});
+             ?OP_RSHIFT              -> throw({invalid, {disabled, rightshift}});
              ?OP_BOOLAND             -> booland;
              ?OP_BOOLOR              -> boolor;
              ?OP_NUMEQUAL            -> numequal;

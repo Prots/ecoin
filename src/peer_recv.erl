@@ -22,7 +22,7 @@ loop(Socket) ->
     {ok, _, Message} = protocol:receive_message(Socket),
     %% Message dispatch
     case Message of
-        #addr{addresses=Addresses} ->
+        #addr{addr_list=Addresses} ->
             manager:new_peers(Addresses);
         #inv{inventory=Inventory} ->
             Inventory;
