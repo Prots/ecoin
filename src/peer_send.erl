@@ -23,8 +23,8 @@ start_link(Socket) ->
     gen_server:start_link(?MODULE, Socket, []).
 
 %% @doc Send a message to a peer
-send(PeerPid, Message) ->
-    gen_server:cast(PeerPid, {send, Message}).
+send(SendPid, Message) ->
+    gen_server:cast(SendPid, {send, Message}).
 
 init(Socket) ->
     {ok, Socket}.

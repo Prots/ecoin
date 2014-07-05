@@ -14,6 +14,7 @@
 -spec send(socket(), #message{}) -> ok;
           (socket(), payload())  -> ok.
 send(Socket, Message) when is_record(Message, message) ->
+    lager:info("Sending message: ~p", [Message]),
     ranch_tcp:send(Socket, encode(Message));
 send(Socket, Payload) -> 
     send(Socket, new(Payload)).
@@ -48,7 +49,9 @@ recv(Socket, Timeout) ->
                       true = checksum_is_valid(Checksum, Data),
                       Command:decode(Data)
               end,
-    Message#message{payload = Payload}.
+    Message1 = Message#message{payload = Payload},
+    lager:info("Received message: ~p", [Message1]),
+    Message1.
 
 %% @doc Create a new message with given payload on main network
 -spec new(payload()) -> #message{}.

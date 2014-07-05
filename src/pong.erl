@@ -8,9 +8,9 @@
 %% @doc Encode a pong message
 -spec encode(#pong{}) -> <<_:64>>.
 encode(#pong{nounce = Nounce}) ->
-    Nounce.
+    <<Nounce:64/little>>.
 
 %% @doc Decode a pong message
 -spec decode(<<_:64>>) -> #pong{}.
-decode(Nounce) when byte_size(Nounce) == 8 ->
+decode(<<Nounce:64/little>>) ->
     #pong{nounce = Nounce}.

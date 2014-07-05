@@ -51,7 +51,7 @@ init({IP, Port} = Peer) ->
 
     %% Create the send and receive processes
     {ok, SendPid} = peer_send:start_link(Socket),
-    {ok, RecvPid} = peer_recv:start_link(Socket, self()),
+    {ok, RecvPid} = peer_recv:start_link(Socket, self(), SendPid),
 
     State = #state{
                send_pid = SendPid,
@@ -65,8 +65,9 @@ init({IP, Port} = Peer) ->
 handle_call(_, _, State) ->
     {stop, not_used, State}.
 
-handle_cast(_, State) ->
-    {stop, not_used, State}.
+handle_cast({send, Message}, #state{send_pid = SendPid} = State) ->
+    peer_send:send(SendPid, Message),
+    {noreply, State}.
 
 handle_info(_, State) ->
     {stop, not_used, State}.
@@ -89,7 +90,7 @@ handshake(Socket, Peer) ->
     Network   = config:network(),
 
     %% Create and send our version
-    MyVersion = my_version(Peer),
+    MyVersion = version:new(Peer),
     ok = message:send(Socket, MyVersion),
 
     %% Receive the peers version
@@ -111,28 +112,3 @@ handshake(Socket, Peer) ->
 
     %% Return the peers version
     Version.
-
-%% @doc Construct the version message to send to a peer
-%%      NOTE: Placed here because I only want pure code in version.erl
--spec my_version(address()) -> #version{}.
-my_version({IP, Port}) ->
-    Services = config:services(),
-    #version{
-       version   = config:protocol_version(),
-       services  = Services,
-       timestamp = now(),
-       addr_recv = #net_addr{
-                      ip       = IP,
-                      port     = Port,
-                      services = []
-                     },
-       addr_from = #net_addr{
-                      ip       = config:ip(),
-                      port     = config:port(),
-                      services = Services
-                     },
-       nounce       = ecoin_util:nounce(4),
-       user_agent   = config:user_agent(),
-       start_height = blockchain:last_block(),
-       relay        = config:relay()
-      }.

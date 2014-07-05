@@ -4,7 +4,8 @@
 
 -behaviour(gen_server).
 
--export([connected_peers/0]).
+-export([active_peers/0,
+         inactive_peers/0]).
 
 -export([new_peers/1,
          connected/1,
@@ -19,24 +20,24 @@
 
 -include("ecoin.hrl").
 
--define(CONN_TAB, connection_tab).
+-define(CONN_TAB, ecoin_connection_tab).
 
 -record(state, {
           peers    :: [address()],
-          outgoing :: non_neg_integer(),
-          limit    :: pos_integer()
+          outgoing :: uinteger(),
+          limit    :: uinteger()
          }).
 
--type connected_peers() :: [connected_peer()].
--type connected_peer()  :: {pid(), connecting, address(), timestamp()} |
-                           {pid(), connected, #version{}, timestamp()}.
-
-%% @doc Return a list of all connected peers
--spec connected_peers() -> connected_peers().
-connected_peers() ->
+%% @doc Return a list of all active (connected) peers
+-spec active_peers() -> active_peers().
+active_peers() ->
     ets:tab2list(?CONN_TAB).
 
-%% @doc Supply the manager with new peers
+%% @doc Return a list of all inactive (not connected) peers
+-spec inactive_peers() -> [address()].
+inactive_peers() ->
+    gen_server:call(?MODULE, inactive_peers).
+
 -spec new_peers([address()]) -> ok.
 new_peers(Peers) ->
     gen_server:cast(?MODULE, {new_peers, Peers}).
@@ -47,6 +48,7 @@ new_peers(Peers) ->
 connected(Version) ->
     gen_server:cast(?MODULE, {connected, self(), Version}).
 
+%% @doc Start the peer manager
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -55,26 +57,18 @@ start_link() ->
 init([]) ->
     ConnectionLimit = config:outgoing_limit(),
     PredefinedPeers = config:predefined_peers(),
-    DNS             = config:dns(),
 
     ?CONN_TAB = ets:new(?CONN_TAB, [named_table]),
 
-    lager:info("Starting the peer manager with connection limit: ~p",
-               [ConnectionLimit]),
-    lager:info("Predefined peers: ~p", [PredefinedPeers]),
-
-    lager:info("Seeding with peers from given dns: ~p", [DNS]),
-    DNSPeers = ecoin_util:get_peers_dns(DNS),
-
     State = #state{
-               peers    = PredefinedPeers ++ DNSPeers,
+               peers    = PredefinedPeers ++ ecoin_util:dns_peers(),
                outgoing = 0,
                limit    = ConnectionLimit
               },
     {ok, State, 0}.
 
-handle_call(_, _, State) ->
-    {stop, not_used, State}.
+handle_call(inactive_peers, _From, #state{peers = Peers} = State) ->
+    {reply, Peers, State}.
 
 handle_cast({new_peers, NewPeers}, State) ->
     lager:info("New peers: ~p", [NewPeers]),
@@ -92,16 +86,21 @@ handle_cast({new_peers, NewPeers}, State) ->
             {noreply, State1}
     end;
 handle_cast({connected, Pid, Version}, State) ->
-    [{Pid, _Peer, connecting, undefined}] = ets:lookup(?CONN_TAB, Pid),
+    [{Pid, connecting, _Peer, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
     ets:insert(?CONN_TAB, {Pid, connected, Version, now()}),
     {noreply, State}.
 
 handle_info({'DOWN', _Ref, process, Pid, Reason}, State) ->
     #state{outgoing = Outgoing} = State,
-    [{Pid, PeerState, Version, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
-    #version{addr_from = #net_addr{ip = IP, port = Port}} = Version,
+    [{Pid, PeerState, VersionOrAddress, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
+    Peer = case VersionOrAddress of
+               #version{addr_from = NetAddr} ->
+                   {NetAddr#net_addr.ip, NetAddr#net_addr.port};
+               Address ->
+                   Address
+           end,
     lager:info("Peer ~p (~p) [~p] died with reason: ~p.",
-               [{IP, Port}, Pid, PeerState, Reason]),
+               [Peer, Pid, PeerState, Reason]),
     ets:delete(?CONN_TAB, Pid),
     {noreply, State#state{outgoing = Outgoing - 1}, 0};
 handle_info(timeout, State) ->

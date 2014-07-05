@@ -5,7 +5,11 @@
          nounce/1,
          in_mask/2,
          get_external_ip/0,
-         get_peers_dns/1]).
+         dns_peers/0,
+         dns_peers/2]).
+
+-type address() :: {inet:ip_address(), inet:port_number()}.
+-type hostaddr() :: inet:hostname() | inet:ip_address().
 
 %% @doc Convert a timestamp into a single big integer
 -spec timestamp_to_integer(erlang:timestamp()) -> non_neg_integer().
@@ -37,19 +41,36 @@ get_external_ip() ->
     inet:parse_ipv4_address(IPString).
 
 %% @doc Retrive bootstrapping peers from dns server(s)
--type hostaddr() :: inet:hostname() | inet:ip_address().
--spec get_peers_dns([hostaddr()] | hostaddr()) ->
-    [{inet:ip_address(), inet:port_number()}].
-get_peers_dns(DNSs) when is_list(DNSs) ->
-        Port = case config:network() of
-              main     -> 8333;
-              testnet3 -> 18333
-           end, 
-        SuccessZip = fun({ok, IPs}) ->
-                             {true, lists:map(fun(IP) -> {IP, Port} end, IPs)};
-                        (_) -> false
-                     end,
-    Result = [inet:getaddrs(Host, inet) || Host <- DNSs],
-    lists:flatten(lists:filtermap(SuccessZip, Result));
-get_peers_dns(DNS) ->
-    get_peers_dns([DNS]).
+%%      Grab the dns servers and how many entries we want
+%%      from the configuration.
+-spec dns_peers() -> [address()].
+dns_peers() ->
+    dns_peers(config:dns(), config:dns_limit()).
+
+%% @doc Same as above but with explicit parameters.
+-spec dns_peers([hostaddr()] | hostaddr(), non_neg_integer()) -> [address()].
+dns_peers(DNSs, DNSLimit) when is_list(DNSs) ->
+        Port = config:default_port(),
+        AccDNS = fun (_DNS, {Acc, 0}) ->
+                         {Acc, 0}; 
+                     (DNS, {Acc, Left}) ->
+                         try
+                             {ok, IPs} = inet:getaddrs(DNS, inet),
+                             Length = length(IPs),
+                             ToPeer = fun (IP) -> {IP, Port} end,
+                             case Length > Left of
+                                 true ->
+                                     {IPs1, _} = lists:split(Left, IPs),
+                                     Peers = lists:map(ToPeer, IPs1),
+                                     {Peers ++ Acc, 0};
+                                 false ->
+                                     Peers = lists:map(ToPeer, IPs),
+                                     {Peers ++ Acc, Left - Length}
+                             end
+                         catch error:_ -> {Acc, Left}
+                         end
+                 end,
+        {DNSPeers, 0} = lists:foldl(AccDNS, {[], DNSLimit}, DNSs),
+        DNSPeers;
+dns_peers(DNS, DNSLimit) ->
+    dns_peers([DNS], DNSLimit).

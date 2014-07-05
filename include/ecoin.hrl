@@ -258,3 +258,8 @@
 %% Filter types
 -type filter_flag()  :: none | all | p2pubkey_only.
 -type filter_flags() :: [filter_flag()].
+
+-type active_peers() :: [active_peer()].
+-type active_peer()  ::
+          {pid(), connecting, address(), timestamp()} |
+          {pid(), connected, #version{}, timestamp()}.

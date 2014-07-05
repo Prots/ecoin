@@ -1,6 +1,7 @@
 -module(version).
 
--export([encode/1,
+-export([new/1,
+         encode/1,
          decode/1,
          all_services/0,
          service_to_integer/1,
@@ -8,6 +9,31 @@
          decode_services/1]).
 
 -include("ecoin.hrl").
+
+%% @doc Create a new version message depending on
+%%      the configuration and the state of client(start_height).
+-spec new(address()) -> #version{}.
+new({IP, Port}) ->
+    Services = config:services(),
+    #version{
+       version   = config:protocol_version(),
+       services  = Services,
+       timestamp = now(),
+       addr_recv = #net_addr{
+                      ip       = IP,
+                      port     = Port,
+                      services = []
+                     },
+       addr_from = #net_addr{
+                      ip       = config:ip(),
+                      port     = config:port(),
+                      services = Services
+                     },
+       nounce       = ecoin_util:nounce(4),
+       user_agent   = config:user_agent(),
+       start_height = blockchain:last_block(),
+       relay        = config:relay()
+      }.
 
 %% @doc Encode a version message
 -spec encode(#version{}) -> iodata().

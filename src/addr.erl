@@ -1,6 +1,7 @@
 -module(addr).
 
--export([encode/1,
+-export([new/1,
+         encode/1,
          decode/1,
          encode_net_addr/1,
          decode_net_addr/1,
@@ -8,6 +9,14 @@
          decode_ipaddress/1]).
 
 -include("ecoin.hrl").
+
+%% @doc Create a new addr message in response to
+%%      a getaddr message
+-spec new(pid()) -> #addr{}.
+new(ControlPid) ->
+    AddrList = lists:filtermap(fun_getaddr(ControlPid),
+                               peer_man:active_peers()),
+    #addr{addr_list = AddrList}.
 
 %% @doc Encode an addr message
 -spec encode(#addr{}) -> iodata().
@@ -60,6 +69,23 @@ encode_ipaddress({I0, I1, I2, I3, I4, I5, I6, I7}) ->
 -spec decode_ipaddress(<<_:128>>) -> ipaddr().
 decode_ipaddress(<<I0:16, I1:16, I2:16, I3:16, I4:16, I5:16, I6:16, I7:16>>) ->
     {I0, I1, I2, I3, I4, I5, I6, I7}.
+
+%% @doc Given an entry from the connection table return
+%%      a net_addr structure that is up to date.
+-spec fun_getaddr(pid()) -> fun((active_peer()) -> #net_addr{}).
+fun_getaddr(ControlPid) ->
+    fun ({Pid, _, _, _}) when Pid == ControlPid ->
+            false;
+        ({_Pid, connecting, {IP, Port}, Timestamp}) ->
+            NetAddr = #net_addr{
+                         time = Timestamp,
+                         ip   = IP,
+                         port = Port
+                        },
+            {true, NetAddr};
+        ({_Pid, connected, #version{addr_from = NetAddr}, Timestamp}) ->
+            {true, NetAddr#net_addr{time = Timestamp}}
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

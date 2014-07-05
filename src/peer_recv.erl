@@ -44,12 +44,11 @@ handle_call(_Msg, _From, State) ->
 handle_cast(_Msg, State) ->
     {stop, not_used, State}.
 
-handle_info(timeout, State) ->
+handle_info(timeout, #state{socket = Socket} = State) ->
     #message{
       command = Command,
       payload = Payload
-      } = Message = message:recv(State#state.socket),
-    lager:info("Received message: ~p", [Message]),
+      } = message:recv(Socket),
     Payload1 = case Payload == undefined of
                    true  -> Command;
                    false -> Payload
@@ -88,21 +87,7 @@ handle(getaddr, State) ->
        ctl_pid  = ControlPid,
        send_pid = SendPid
       } = State,
-    GetAddrs =
-        fun ({Pid, _, _, _}) when Pid == ControlPid ->
-                false;
-            ({_Pid, connecting, {IP, Port}, Timestamp}) ->
-                NetAddr = #net_addr{
-                             time = Timestamp,
-                             ip   = IP,
-                             port = Port
-                            },
-                {true, NetAddr};
-            ({_Pid, connected, #version{addr_from = NetAddr}, Timestamp}) ->
-              {true, NetAddr#net_addr{time = Timestamp}}
-        end,
-    AddrList = lists:filtermap(GetAddrs, peer_man:connected_peers()),
-    peer_send:send(SendPid, #addr{addr_list = AddrList});
+    peer_send:send(SendPid, addr:new(ControlPid));
 handle(mempool, _State) ->
     ok;
 handle(#ping{nounce = Nounce}, #state{send_pid = SendPid}) ->
