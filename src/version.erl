@@ -1,105 +1,142 @@
 -module(version).
 
--export([new/1,
-         validate/1,
-         from_self/2,
-         pack/1,
-         unpack/1]).
+-export([encode/1,
+         decode/1,
+         all_services/0,
+         encode_service/1,
+         encode_services/1,
+         decode_services/1]).
 
 -include("ecoin.hrl").
 
--define(MAX_NOUNCE, 16#ffffffffffffffff).
+%% @doc Encode a version record, services or the relay boolean
+-spec encode(#version{}) -> iodata().
+encode(#version{
+          version      = Version,
+          services     = Services,
+          timestamp    = Timestamp,
+          addr_recv    = AddrRecv,
+          addr_from    = AddrFrom,
+          nounce       = Nounce,
+          user_agent   = UserAgent,
+          start_height = StartHeight,
+          relay        = Relay
+         }) ->
+    RelayByte = case Relay of
+                    true  -> 1;
+                    false -> 0
+                end,
+    [
+     <<Version:32/signed-little>>,
+     encode_services(Services),
+     <<(ecoin_util:timestamp_to_integer(Timestamp)):64/signed-little>>,
+     encode_net_addr(AddrRecv),
+     encode_net_addr(AddrFrom),
+     <<Nounce:32/little>>,
+     protocol:encode_varbin(UserAgent),
+     <<StartHeight:32/signed-little>>,
+     RelayByte
+    ].
 
-%% @doc Construct a version message with the current configuration
-new({PeerIP, PeerPort}) ->
-    {ok, IP}   = config:ip(),
-    {ok, Port} = config:port(),
-    Services   = config:services(),
-    Receiving  = #net_addr{ip=PeerIP, port=PeerPort},
-    Sending    = #net_addr{services=Services, ip=IP, port=Port},
-    new(config:protocol_version(),
-        Services,
-        os:timestamp(),
-        Receiving,
-        Sending,
-        ecoin_util:nounce(?MAX_NOUNCE),
-        config:user_agent(),
-        blockchain:last_block(),
-        config:relay()).
-
-%% @doc Pure function to construct a version message
-new(ProtoVer, Services, Timestamp, Receiving, Sending,
-    Nounce, UserAgent, StartHeight, Relay) ->
-    #version{proto_ver    = ProtoVer,
-             services     = Services,
-             timestamp    = Timestamp,
-             receiving    = Receiving,
-             sending      = Sending,
-             nounce       = Nounce,
-             user_agent   = UserAgent,
-             start_height = StartHeight,
-             relay        = Relay}.
-
-%% @doc Validate an incomping version message
-%%      ALERT! Does nothing atm.
-validate(_Version) ->
-    Tests = [],
-    Id = fun(X) -> X end,
-    lists:all(Id, Tests).
-
-%% @doc Check if a version message is from ourselves
-from_self(#version{nounce=N1}, #version{nounce=N2}) ->
-    N1 == N2.
-
-%% @doc Pack a version record
-pack(#version{proto_ver    = ProtoVer,
-              services     = Services,
-              timestamp    = Timestamp,
-              sending      = Sending,
-              receiving    = Receiving,
-              nounce       = Nounce,
-              user_agent   = UserAgent,
-              start_height = StartHeight,
-              relay        = Relay}) ->
-    [<<ProtoVer:32/little>>,
-     protocol:pack_services(Services),
-     <<(ecoin_util:timestamp_to_int(Timestamp)):64/little>>,
-     protocol:pack_net_addr(Sending),
-     protocol:pack_net_addr(Receiving),
-     <<Nounce:64/little>>,
-     protocol:pack_varstr(UserAgent),
-     <<StartHeight:32/little>>,
-     pack_bool(Relay)].
-
-%% @doc Unpack a version record
-unpack(Binary0) ->
-    <<ProtoVer:32/little,
+%% @doc Decode a version message or services.
+-spec decode(binary()) -> #version{};
+            (uinteger()) -> [services()].
+decode(Binary) when is_binary(Binary) ->
+    <<
+      Version:32/signed-little,
       Services:8/binary,
-      IntTimestamp:64/little,
-      Receiving:26/binary,
-      Sending:26/binary,
-      Nounce:64/little,
-      Rest0/binary>> = Binary0,
-    {UserAgent, Binary1} = protocol:unpack_varstr(Rest0),
-    <<StartHeight:32/little, Relay/binary>> = Binary1,
-    
-    #version{proto_ver    = ProtoVer,
-             services     = protocol:unpack_services(Services),
-             timestamp    = ecoin_util:int_to_timestamp(IntTimestamp),
-             sending      = protocol:unpack_net_addr(Sending),
-             receiving    = protocol:unpack_net_addr(Receiving),
-             nounce       = Nounce,
-             user_agent   = UserAgent,
-             start_height = StartHeight,
-             relay        = unpack_bool(Relay)}.
+      Timestamp:64/signed-little,
+      AddrRecv:26/binary,
+      AddrFrom:26/binary,
+      Nounce:32/little, Binary1/binary
+    >> = Binary,
+    {UserAgent, Binary2} = protocol:decode_varbin(Binary1),
+    <<StartHeight:32/signed-little,
+      RelayByte/binary>> = Binary2,
+    Relay = case RelayByte of
+                <<1>> -> true;
+                <<0>> -> false;
+                <<>>  -> true
+            end,
+    #version{
+       version      = Version,
+       services     = decode_services(Services),
+       timestamp    = ecoin_util:integer_to_timestamp(Timestamp),
+       addr_recv    = decode_net_addr(AddrRecv),
+       addr_from    = decode_net_addr(AddrFrom),
+       nounce       = Nounce,
+       user_agent   = UserAgent,
+       start_height = StartHeight,
+       relay        = Relay
+      }.
 
-%% @doc Pack a boolean
-pack_bool(true)  -> <<1:8/little>>;
-pack_bool(false) -> <<0:8/little>>. 
+%% @doc Special net_addr encode function
+-spec encode_net_addr(#net_addr{}) -> binary().
+encode_net_addr(NetAddr) ->
+    NetAddr1 = NetAddr#net_addr{time = 0},
+    <<_:32, Binary/binary>> = iolist_to_binary(addr:encode_net_addr(NetAddr1)),
+    Binary.
 
-%% @doc Unpack a boolean
-unpack_bool(<<>>)           -> true;
-unpack_bool(<<1:8/little>>) -> true;
-unpack_bool(<<0:8/little>>) -> false.
+%% @doc Special net_addr decode function
+-spec decode_net_addr(<<_:240>>) -> #net_addr{}.
+decode_net_addr(Binary) ->
+    {NetAddr, <<>>} = addr:decode_net_addr(<<0:32, Binary/binary>>),
+    NetAddr#net_addr{time = undefined}.
 
+%% @doc All defined services
+-spec all_services() -> services().
+all_services() -> [node_network].
 
+%% @doc Encode a service
+-spec encode_service(service()) -> uinteger().
+encode_service(node_network) -> ?SERVICE_NODE_NETWORK.
+
+%% @doc Encode a services field
+-spec encode_services(services()) -> <<_:64>>.
+encode_services(Services) ->
+    Int = lists:foldl(fun(Value, Acc) -> Value bor Acc end,
+                      lists:map(fun encode/1, Services)),
+    <<Int:64/little>>.
+
+%% @doc Decode a services field
+-spec decode_services(<<_:64>>) -> services().
+decode_services(<<Services:64/little>>) ->
+    [Service || Service <- all_services(),
+                ecoin_util:in_mask(encode_service(Service), Services)].
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+decode_test() ->
+    Binary = <<
+               16#62EA0000:32,
+               16#0100000000000000:64,
+               16#11B2D05000000000:64,
+               16#010000000000000000000000000000000000FFFF000000000000:26/unit:8,
+               16#010000000000000000000000000000000000FFFF000000000000:26/unit:8,
+               16#3B2EB35D8CE61765:32,
+               16#0F2F5361746F7368693A302E372E322F:16/unit:8,
+               16#C03E0300:32
+             >>,
+    NetAddr = #net_addr{
+                 time     = undefined,
+                 services = [node_network],
+                 ip       = {0, 0, 0, 0, 0, 16#FFFF, 0, 0},
+                 port     = 0
+                },
+    Expected = #version{
+                 version      = 60002,
+                 services     = [node_network],
+                 timestamp    = {{2012, 12, 18}, {18, 12, 33}},
+                 addr_from    = NetAddr,
+                 addr_recv    = NetAddr,
+                 nounce       = 1696065164,
+                 user_agent   = <<"/Satoshi:0.7.2/">>,
+                 start_height = 212672,
+                 relay        = true
+                 },
+    #version{timestamp = TS} = V  = version:decode(Binary),
+    Version= V#version{timestamp = calendar:now_to_universal_time(TS)},
+    ?assertEqual(Expected, Version).
+
+-endif.

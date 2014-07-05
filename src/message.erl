@@ -1,179 +1,283 @@
 -module(message).
 
--export([send_message/2,
-         receive_message/1]).
+-export([send/2,
+         recv/1,
+         new/1,
+         new/2,
+         encode/1,
+         decode/1]).
 
 -include("ecoin.hrl").
 
 %% @doc Send a message over a socket.
 %%      Construct header and pack it before sending. 
-send_message(Socket, Message) ->
-    {ok, Network} = config:network(),
-    Payload = list_to_binary(pack(Message)),
-    Header  = #message_header{network  = Network,
-                              command  = element(1, Message),
-                              length   = byte_size(Payload),
-                              checksum = compute_checksum(Payload)},
-    ranch_tcp:send(Socket, [pack_header(Header), Payload]).
+-spec send(socket(), #message{}) -> ok;
+          (socket(), payload())  -> ok.
+send(Socket, Message) when is_record(Message, message) ->
+    ranch_tcp:send(Socket, encode(Message));
+send(Socket, Payload) -> 
+    send(Socket, new(Payload)).
 
 %% @doc Receive a message over a socket
 %%      Receive header
 %%      Receive payload
 %%      Check checksum
-%%      Unpack message
-receive_message(Socket) ->
-    Header  = receive_header(Socket),
-    #message_header{command  = Command,
-                    length   = Length,
-                    checksum = Checksum} = Header,
-    {ok, Payload} = case Length of
-                        0 ->
-                            {ok, <<>>};
-                        _ ->
-                            ranch_tcp:recv(Socket, Length, infinity)
-                    end,
-    true = check_checksum(Checksum, Payload),
-    Message = unpack(Command, Payload),
-    {ok, Header, Message}.
+%%      Decode message
+-spec recv(socket()) -> #message{}.
+recv(Socket) ->
+    recv(Socket, infinity). 
 
-%% @doc Pack a message
-pack(Version) when is_record(Version, version) ->
-    version:pack(Version);
-pack(VerAck) when is_record(VerAck, verack) ->
-    [<<>>];
-pack(Addr) when is_record(Addr, addr) ->
-    addr:pack(Addr);
-pack(Inventory) when is_record(Inventory, inv) ->
-    inv:pack(Inventory);
-pack(GetData) when is_record(GetData, getdata) ->
-    inv:pack(GetData);
-pack(NotFound) when is_record(NotFound, notfound) ->
-    inv:pack(NotFound);
-pack(GetBlocks) when is_record(GetBlocks, getblocks) -> 
-    locator:pack(GetBlocks);
-pack(GetHeaders) when is_record(GetHeaders, getheaders) ->
-    locator:pack(GetHeaders);
-pack(Tx) when is_record(Tx, tx) ->
-    tx:pack(Tx);
-pack(Block) when is_record(Block, block) ->
-    block:pack(Block);
-pack(Headers) when is_record(Headers, headers) ->
-    block:pack_headers(Headers);
-pack(GetAddr) when is_record(GetAddr, getaddr) ->
-    [<<>>];
-pack(MemPool) when is_record(MemPool, mempool) ->
-    [<<>>];
-pack(#ping{nounce=Nounce}) ->
-    [protocol:pack_uint64_le(Nounce)];
-pack(#pong{nounce=Nounce}) ->
-    [protocol:pack_uint64_le(Nounce)];
-pack(FilterLoad) when is_record(FilterLoad, filterload) ->
-    filter:pack_filterload(FilterLoad);
-pack(FilterAdd) when is_record(FilterAdd, filteradd) ->
-    [FilterAdd#filteradd.data];
-pack(FilterClear) when is_record(FilterClear, filterclear) ->
-    [<<>>];
-pack(MerkleBlock) when is_record(MerkleBlock, merkleblock) ->
-    filter:pack_merkleblock(MerkleBlock);
-pack(Alert) when is_record(Alert, alert) ->
-    alert:pack(Alert).
+-spec recv(socket(), timeout()) -> #message{}.
+recv(Socket, Timeout) ->
+    Network = config:network(),
+    {ok, MessageHeader} = ranch_tcp:recv(Socket, 24, Timeout),
+    #message{
+      network  = Network,
+      command  = Command,
+      length   = Length,
+      checksum = Checksum
+      } = Message = decode(MessageHeader),
+    Payload = case Length of
+                  0 ->
+                      true = command_has_no_payload(Command),
+                      true = checksum_is_valid(Checksum, <<>>),
+                      undefined;
+                  _ ->
+                      true = command_has_payload(Command),
+                      {ok, Data} = ranch_tcp:recv(Socket, Length, Timeout),
+                      true = checksum_is_valid(Checksum, Data),
+                      Command:decode(Data)
+              end,
+    Message#message{payload = Payload}.
 
-%% @doc Unpack a message
-unpack(version, Binary) -> 
-    version:pack(Binary);
-unpack(verack, <<>>) ->
-    #verack{};
-unpack(addr, Binary) ->
-    addr:unpack(Binary);
-unpack(inv, Binary) ->
-    inv:unpack(inv, Binary);
-unpack(getdata, Binary) ->
-    inv:unpack(getdata, Binary);
-unpack(notfound, Binary) ->
-    inv:unpack(notfound, Binary);
-unpack(getblocks, Binary) ->
-    locator:unpack(getblocks, Binary);
-unpack(getheaders, Binary) ->
-    locator:unpack(getheaders, Binary);
-unpack(tx, Binary) ->
-    tx:unpack(Binary);
-unpack(block, Binary) ->
-    block:unpack(Binary);
-unpack(headers, Binary) ->
-    block:unpack_headers(Binary);
-unpack(getaddr, <<>>) ->
-    #getaddr{};
-unpack(mempool, <<>>) ->
-    #mempool{};
-unpack(ping, <<Nounce:64/little>>) ->
-    #ping{nounce=Nounce};
-unpack(pong, <<Nounce:64/little>>) ->
-    #pong{nounce=Nounce};
-unpack(filterload, Binary) ->
-    filter:unpack_filterload(Binary);
-unpack(filteradd, Data) ->
-    #filteradd{data=Data};
-unpack(filterclear, <<>>) ->
-    #filterclear{};
-unpack(merkleblock, Binary) ->
-    filter:unpack_merkleblock(Binary);
-unpack(alert, Binary) ->
-    alert:unpack(Binary).
-    
+%% @doc Create a new message with given payload on main network
+-spec new(payload()) -> #message{}.
+new(Payload) ->
+    new(config:network(), Payload).
+
+%% @doc Create a new message with given payload and network
+-spec new(network(), payload()) -> #message{}.
+new(Network, NoPayload) when is_atom(NoPayload) ->
+    #message{
+       network = Network,
+       command = NoPayload
+      };
+new(Network, Payload) ->
+    #message{
+       network = Network,
+       command = element(1, Payload),
+       payload = Payload
+      }.
+
+%% @doc Encode a message
+-spec encode(#message{}) -> message_bin().
+encode(#message{
+          command  = Command,
+          length   = undefined,
+          checksum = undefined,
+          payload  = Message
+         } = Message) ->
+    Payload = case command_has_payload(Command) of
+                  true  -> iolist_to_binary(Command:encode(Message));
+                  false -> <<>>
+              end,
+    encode(
+      Message#message{
+        length   = byte_size(Payload),
+        checksum = compute_checksum(Payload),
+        payload  = Payload
+       });
+encode(#message{
+          network  = Network,
+          command  = Command,
+          length   = Length,
+          checksum = Checksum,
+          payload  = Payload
+         }) ->
+    <<
+      (encode_network(Network)):32/little,
+      (encode_command(Command))/binary,
+      Length:32/little,
+      Checksum/binary,
+      Payload/binary
+    >>.
+
+%% @doc Decode a message header
+-spec decode(message_header_bin()) -> #message{}.
+decode(<<
+         Magic:32/little,
+         Command:12/binary,
+         Length:32/little,
+         Checksum:4/binary
+       >>) ->
+    #message{
+       network  = decode_network(Magic),
+       command  = decode_command(Command),
+       length   = Length,
+       checksum = Checksum
+      }.
+
+%% @doc Encode the network magic bytes
+-spec encode_network(network()) -> magic().
+encode_network(main)     -> ?NETWORK_MAIN;
+encode_network(testnet)  -> ?NETWORK_TESTNET;
+encode_network(testnet3) -> ?NETWORK_TESTNET3;
+encode_network(namecoin) -> ?NETWORK_NAMECOIN.
+
+%% @doc Decode the magic bytes to get the network
+-spec decode_network(magic()) -> network().
+decode_network(?NETWORK_MAIN)     -> main;
+decode_network(?NETWORK_TESTNET)  -> testnet;
+decode_network(?NETWORK_TESTNET3) -> testnet3;
+decode_network(?NETWORK_NAMECOIN) -> namecoin.
+
+%% @doc Encode a command binary
+-spec encode_command(command()) -> command_bin().
+encode_command(Command) ->
+    CommandBin = atom_to_binary(Command, utf8),
+    PadLength = 12 - byte_size(CommandBin),
+    <<CommandBin/binary, ?PAD(PadLength)/binary>>.
+
+%% @doc Decode a command
+-spec decode_command(command_bin()) -> command().
+decode_command(CommandBin) when byte_size(CommandBin) == 12 ->
+    Command = binary_to_existing_atom(hd(binary:split(CommandBin, <<0>>)), utf8),
+    true = lists:member(Command, commands()),
+    Command.
+
 %% ---------------------------------------------------------------------------- 
-%% Header
+%% Internal 
 %% ---------------------------------------------------------------------------- 
 
-%% @doc Receive a header
-receive_header(Socket) ->
-    {ok, Header} = ranch_tcp:recv(Socket, 24, infinity),
-    unpack_header(Header).
+%% @doc All bitcoin messages (commands)
+-spec commands() -> [command()].
+commands() ->
+    commands_with_payload() ++ commands_without_payload().
 
-%% @doc Pack a message header
-pack_header(#message_header{network=Network, command=Command,
-                            length=Length, checksum=Checksum}) ->
-    [pack_magic(Network),
-     pack_command(Command),
-     <<Length:32/little>>,
-     Checksum].
+%% @doc Check if a command should have a payload
+-spec command_has_payload(command_with_payload())    -> true;
+                         (command_without_payload()) -> false.
+command_has_payload(Command) ->
+    lists:member(Command, commands_with_payload()).
 
-%% @doc Unpack a message header
-unpack_header(<<Magic:4/binary, Command:12/binary,
-                Length:32/little, Checksum:4/binary>>) ->
-    #message_header{network  = unpack_magic(Magic),
-                    command  = unpack_command(Command),
-                    length   = Length,
-                    checksum = Checksum}.
+%% @doc All commands that has a payload
+-spec commands_with_payload() -> [command_with_payload()].
+commands_with_payload() ->
+    [
+     version,
+     addr,
+     inv,
+     getdata,
+     notfound,
+     getblocks,
+     getheaders,
+     tx,
+     block,
+     headers,
+     ping,
+     pong,
+     reject,
+     filterload,
+     filteradd,
+     merkleblock,
+     alert
+    ].
 
-%% @doc Unpack a command
-unpack_command(Command) ->
-    WithoutPadding = hd(binary:split(Command, <<0>>)),
-    binary_to_existing_atom(WithoutPadding, latin1).
+%% @doc Check to see if a command shouldn't have a payload
+-spec command_has_no_payload(command_without_payload()) -> true;
+                            (command_with_payload())    -> false.
+command_has_no_payload(Command) ->
+    lists:member(Command, commands_without_payload()).
 
-%% @doc Pack a command atom
-pack_command(Command) -> 
-    Binary = atom_to_binary(Command, latin1),
-    PaddingLength  = (12 - byte_size(Binary)) * 8,
-    [Binary, <<0:PaddingLength>>].
+%% @doc All commands that don't carry a payload
+-spec commands_without_payload() -> [command_without_payload()].
+commands_without_payload() ->
+    [
+     verack,
+     getaddr,
+     mempool,
+     filterclear
+    ].
 
 %% @doc Compute the checksum of a payload
+-spec compute_checksum(binary()) -> checksum().
 compute_checksum(Payload) ->
-    Hash = crypto:hash(sha256, Payload),
-    <<Checksum:4/binary, _/binary>> = crypto:hash(sha256, Hash),
-    Checksum.
+    binary:part(ecoin_crypto:hash256(Payload), 0, 4).
 
 %% @doc Verify the checksum of a payload
-check_checksum(Checksum, Payload) ->
+-spec checksum_is_valid(checksum, binary()) -> boolean().
+checksum_is_valid(Checksum, Payload) ->
     Checksum == compute_checksum(Payload).
 
-%% @doc Pack the network from the magic bytes
-unpack_magic(<<16#f9, 16#be, 16#b4, 16#d9>>) -> main;
-unpack_magic(<<16#fa, 16#bf, 16#b5, 16#da>>) -> testnet;
-unpack_magic(<<16#0b, 16#11, 16#09, 16#07>>) -> testnet3;
-unpack_magic(<<16#f9, 16#be, 16#b4, 16#fe>>) -> namecoin.
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 
-%% @doc The magic bytes for the different networks
-pack_magic(main)     -> <<16#f9, 16#be, 16#b4, 16#d9>>;
-pack_magic(testnet)  -> <<16#fa, 16#bf, 16#b5, 16#da>>;
-pack_magic(testnet3) -> <<16#0b, 16#11, 16#09, 16#07>>;
-pack_magic(namecoin) -> <<16#f9, 16#be, 16#b4, 16#fe>>.
+decode_header_test() ->
+    Hdr1 = <<
+             16#F9BEB4D9:32,                 % Network: main
+             16#76657273696F6E0000000000:96, % Command: version
+             16#64000000:32,                 % Length: 100
+             16#3B648D5A:32                  % Checksum
+           >>,
+    Hdr2 = <<
+             16#F9BEB4D9:32,                 % Network: main
+             16#76657261636B000000000000:96, % Command: verack
+             16#00000000:32,                 % Length:  0
+             16#5DF6E0E2:32                  % Checksum
+           >>,
+    Hdr3 = <<
+             16#F9BEB4D9:32,                 % Network: main
+             16#616464720000000000000000:96, % Command: addr
+             16#1F000000:32,                 % Length:  31
+             16#ED52399B:32                  % Checksum
+           >>,
+    Exp1 = #message{
+              network = main,
+              command = version,
+              length = 100,
+              checksum = <<16#3B648D5A:32>>
+             },
+    Exp2 = #message{
+              network = main,
+              command = verack,
+              length  = 0,
+              checksum = <<16#5DF6E0E2:32>>
+             },
+    Exp3 = #message{
+              network = main,
+              command = addr,
+              length  = 31,
+              checksum = <<16#ED52399B:32>>
+             },
+    Cases = [{Exp1, Hdr1}, {Exp2, Hdr2}, {Exp3, Hdr3}],
+    [?assertEqual(Exp, decode(Hdr)) || {Exp, Hdr} <- Cases].
+
+command_test() ->
+    Cases = [
+             {version,     <<"version",     0:40>>},
+             {verack,      <<"verack",      0:48>>},
+             {addr,        <<"addr",        0:64>>},
+             {inv,         <<"inv",         0:72>>},
+             {getdata,     <<"getdata",     0:40>>},
+             {notfound,    <<"notfound",    0:32>>},
+             {getblocks,   <<"getblocks",   0:24>>},
+             {getheaders,  <<"getheaders",  0:16>>},
+             {tx,          <<"tx",          0:80>>},
+             {block,       <<"block",       0:56>>},
+             {headers,     <<"headers",     0:40>>},
+             {getaddr,     <<"getaddr",     0:40>>},
+             {mempool,     <<"mempool",     0:40>>},
+             {ping,        <<"ping",        0:64>>},
+             {pong,        <<"pong",        0:64>>},
+             {reject,      <<"reject",      0:48>>},
+             {filterload,  <<"filterload",  0:16>>},
+             {filteradd,   <<"filteradd",   0:24>>},
+             {filterclear, <<"filterclear", 0>>},
+             {merkleblock, <<"merkleblock", 0>>}
+            ],
+    lists:foreach(fun({Command, CommandBin}) ->
+                          ?assertEqual(Command, decode_command(CommandBin)),
+                          ?assertEqual(CommandBin, encode_command(Command))
+                  end, Cases).
+
+-endif.

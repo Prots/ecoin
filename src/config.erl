@@ -2,7 +2,6 @@
 
 -export([network/0,
          protocol_version/0,
-         ip/0,
          port/0,
          predefined_peers/0,
          dns/0,
@@ -15,47 +14,34 @@
 -include("ecoin.hrl").
 
 network() ->
-    get_config_value(network, main).
-
+    conf(network, main).
 
 protocol_version() -> 
-    70002.
-
-ip() ->
-    get_config_value(ip, {127,0,0,1}).
+    conf(protocol_version, 70002).
 
 port() ->
-    get_config_value(port, 8333).
+    conf(port, 8333).
 
 outgoing_limit() ->
-    get_config_value(outgoing_limit, 10).
+    conf(outgoing_limit, 10).
 
 connection_timeout() ->
-    get_config_value(connection_timeout, 10000).
+    conf(connection_timeout, 10000).
 
 user_agent() ->
-    {ok, Version} = application:get_key(vsn),
-    "/berl:" ++ Version ++ "/" .
+    conf(user_agent, <<"berl">>).
 
 services() -> 
-    [node_network].
+    conf(services, []).
 
 relay() -> 
-    true.
+    conf(relay, true).
 
 predefined_peers() ->
-    get_config_value(peers, []).
+    conf(peers, []).
 
 dns() ->
-    DefaultDNS = ["bitseed.xf2.org",
-                  "dnsseed.bluematt.me",
-                  "seed.bitcoin.sipa.be",
-                  "dnsseed.bitcoin.dashjr.org",
-                  "seed.bitcoinstats.com"],
-    get_config_value(dns, DefaultDNS).
+    conf(dns, []).
 
-get_config_value(Key, Default) ->
-    case application:get_env(Key) of
-        {ok, Val} -> {ok, Val};
-        _         -> {ok, Default}
-    end.
+conf(Key, Def) ->
+    application:get_env(ecoin, Key, Def).

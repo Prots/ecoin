@@ -10,6 +10,7 @@
          ]).
 
 -define(SEED_BYTES, 32).
+-define(SEED, <<"Bitcoin seed">>).
 
 -define(IS_HARDENED(Ix), Ix >= 16#80000000).
 -define(IX_IN_RANGE(Ix), Ix >= 0 andalso Ix < 16#0100000000).
@@ -39,7 +40,7 @@ generate_master_key(Network) ->
 generate_master_key_() ->
     {_, _, _, N, _} = curve_params(),
     S = crypto:rand_bytes(?SEED_BYTES),
-    I = crypto:hmac(sha512, <<"Bitcoin seed">>, S),
+    I = crypto:hmac(sha512, ?SEED, S),
     <<MasterKey:256, ChainCode:32/binary>> = I,
     case MasterKey == 0 orelse MasterKey >= N of
         true  -> generate_master_key_();

@@ -10,19 +10,5 @@
         lager,
         ranch
     ]},
-    {mod, {ecoin_app, []}},
-    {env, [
-           {network, main},
-           {port, 8333},
-           {peers, []},
-           {dns, [
-                  "bitseed.xf2.org",
-                  "dnsseed.bluematt.me",
-                  "seed.bitcoin.sipa.be",
-                  "dnsseed.bitcoin.dashjr.org",
-                  "seed.bitcoinstats.com"
-                 ]},
-           {outgoing_limit, 10},
-           {connection_timeout, 10000}
-          ]}
+    {mod, {ecoin_app, []}}
 ]}.
