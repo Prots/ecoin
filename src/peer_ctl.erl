@@ -8,7 +8,8 @@
 
 -behaviour(gen_server).
 
--export([start_link/1]).
+-export([send/2,
+         start_link/1]).
 
 -export([init/1,
          handle_call/3,
@@ -19,11 +20,16 @@
 
 -record(state, {
           send_pid :: pid(),
+          recv_pid :: pid(),
           socket   :: inet:socket()
          }).
 
 -include("ecoin.hrl").
 
+%% @doc Send an arbitrary message to a peer
+-spec send(pid(), payload() | command_without_payload()) -> ok.
+send(Peer, Message) ->
+    gen_server:cast(Peer, {send, Message}).
 
 %% @doc Start a new outgoing peer process
 -spec start_link(address()) -> {ok, pid()}.
@@ -45,10 +51,11 @@ init({IP, Port} = Peer) ->
 
     %% Create the send and receive processes
     {ok, SendPid} = peer_send:start_link(Socket),
-    {ok, _} = peer_recv:start_link(Socket, self()),
+    {ok, RecvPid} = peer_recv:start_link(Socket, self()),
 
     State = #state{
                send_pid = SendPid,
+               recv_pid = RecvPid,
                socket   = Socket
               },
 
@@ -120,7 +127,7 @@ my_version({IP, Port}) ->
                       services = []
                      },
        addr_from = #net_addr{
-                      ip       = config:get_ip(),
+                      ip       = config:ip(),
                       port     = config:port(),
                       services = Services
                      },

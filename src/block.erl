@@ -29,19 +29,23 @@ encode(#block{
     ].
 
 %% @doc Decode a block message
--spec decode(binary()) -> #block{}.
+-spec decode(binary()) -> {#block{}, binary()}.
 decode(<<Version:32/little,
          PrevBlock:32/binary,
          MerkleRoot:32/binary,
          Timestamp:32/little,
          Bits:32/little,
          Nounce:32/little, Binary/binary>>) ->
-    #block{
-       version     = Version,
-       prev_block  = PrevBlock,
-       merkle_root = MerkleRoot,
-       timestamp   = ecoin_util:integer_to_timestamp(Timestamp),
-       bits        = Bits,
-       nounce      = Nounce,
-       txns        = protocol:decode_array(Binary, fun tx:decode/1)
-      }.
+    {Txns, Binary1} = protocol:decode_array(Binary, fun tx:decode/1),
+    {
+     #block{
+        version     = Version,
+        prev_block  = PrevBlock,
+        merkle_root = MerkleRoot,
+        timestamp   = ecoin_util:integer_to_timestamp(Timestamp),
+        bits        = Bits,
+        nounce      = Nounce,
+        txns        = Txns
+       },
+     Binary1
+    }.

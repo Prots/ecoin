@@ -85,7 +85,7 @@ decode_varuint(<<16#ff, Integer:64/little, Binary/binary>>) ->
 
 %% @doc Encode a variable length binary
 -spec encode_varbin(binary()) -> iodata().
-encode_varbin(Binary) -> [encode_varuint(length(Binary)), Binary].
+encode_varbin(Binary) -> [encode_varuint(byte_size(Binary)), Binary].
 
 %% @doc Decode a variable length binary
 -spec decode_varbin(binary()) -> {binary(), binary()}.

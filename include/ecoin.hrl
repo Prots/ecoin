@@ -231,6 +231,8 @@
           #alert{} |
           undefined.
 
+-type message_type() :: command_without_payload() | payload().
+
 %% Various types
 -type uinteger() :: non_neg_integer().
 -type length() :: non_neg_integer().

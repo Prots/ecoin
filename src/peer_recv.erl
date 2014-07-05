@@ -6,26 +6,118 @@
 %%      coming in from peer.
 -module(peer_recv).
 
--export([start_link/1,
-         init/1]).
+-behaviour(gen_server).
+
+-export([start_link/3]).
+
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 
 -include("ecoin.hrl").
 
-start_link(Socket) ->
-    proc_lib:start_link(?MODULE, init, [Socket]).
+-record(state, {
+          ctl_pid  :: pid(),
+          send_pid :: pid(),
+          socket   :: socket()
+         }).
 
-init(Socket) ->
-    ok = proc_lib:init_ack({ok, self()}),
-    loop(Socket).
+%% @doc Start the receiving peer process
+-spec start_link(socket(), pid(), pid()) -> {ok, pid()}.
+start_link(Socket, ControlPid, SendPid) ->
+    gen_server:start_link(?MODULE, [Socket, ControlPid, SendPid], []).
 
-loop(Socket) ->
-    {ok, _, Message} = protocol:receive_message(Socket),
-    %% Message dispatch
-    case Message of
-        #addr{addr_list=Addresses} ->
-            manager:new_peers(Addresses);
-        #inv{inventory=Inventory} ->
-            Inventory;
-        _ -> io:format("Received message: ~p~n", [Message])
-    end,
-    loop(Socket).
+init([Socket, ControlPid, SendPid]) ->
+    State = #state{
+               ctl_pid  = ControlPid,
+               send_pid = SendPid,
+               socket   = Socket
+              },
+    {ok, State, 0}.
+
+handle_call(_Msg, _From, State) ->
+    {stop, not_used, State}.
+
+handle_cast(_Msg, State) ->
+    {stop, not_used, State}.
+
+handle_info(timeout, State) ->
+    #message{
+      command = Command,
+      payload = Payload
+      } = Message = message:recv(State#state.socket),
+    lager:info("Received message: ~p", [Message]),
+    Payload1 = case Payload == undefined of
+                   true  -> Command;
+                   false -> Payload
+               end,
+    handle(Payload1, State),
+    {noreply, State, 0}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%% @doc Handle an incoming message
+-spec handle(message_type(), #state{}) -> ok.
+handle(#addr{addr_list = AddrList}, _State) ->
+    peer_man:new_peers(AddrList);
+handle(#inv{}, _State) ->
+    ok;
+handle(#getdata{}, _State) ->
+    ok;
+handle(#notfound{}, _State) ->
+    ok;
+handle(#getblocks{}, _State) ->
+    ok;
+handle(#getheaders{}, _State) ->
+    ok;
+handle(#tx{}, _State) ->
+    ok;
+handle(#block{}, _State) ->
+    ok;
+handle(#headers{}, _State) ->
+    ok;
+handle(getaddr, State) ->
+    #state{
+       ctl_pid  = ControlPid,
+       send_pid = SendPid
+      } = State,
+    GetAddrs =
+        fun ({Pid, _, _, _}) when Pid == ControlPid ->
+                false;
+            ({_Pid, connecting, {IP, Port}, Timestamp}) ->
+                NetAddr = #net_addr{
+                             time = Timestamp,
+                             ip   = IP,
+                             port = Port
+                            },
+                {true, NetAddr};
+            ({_Pid, connected, #version{addr_from = NetAddr}, Timestamp}) ->
+              {true, NetAddr#net_addr{time = Timestamp}}
+        end,
+    AddrList = lists:filtermap(GetAddrs, peer_man:connected_peers()),
+    peer_send:send(SendPid, #addr{addr_list = AddrList});
+handle(mempool, _State) ->
+    ok;
+handle(#ping{nounce = Nounce}, #state{send_pid = SendPid}) ->
+    peer_send:send(SendPid, #pong{nounce = Nounce});
+handle(#pong{}, _State) ->
+    ok;
+handle(#reject{}, _State) ->
+    ok;
+handle(#filterload{}, _State) ->
+    ok;
+handle(#filteradd{}, _State) ->
+    ok;
+handle(filterclear, _State) ->
+    ok;
+handle(#merkleblock{}, _State) ->
+    ok;
+handle(#alert{}, _State) ->
+    ok.

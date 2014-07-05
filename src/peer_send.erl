@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 -export([start_link/1,
-         send_message/2]).
+         send/2]).
 
 -export([init/1,
          handle_call/3,
@@ -23,8 +23,8 @@ start_link(Socket) ->
     gen_server:start_link(?MODULE, Socket, []).
 
 %% @doc Send a message to a peer
-send_message(SendPid, Message) ->
-    gen_server:cast(SendPid, {send_message, Message}).
+send(PeerPid, Message) ->
+    gen_server:cast(PeerPid, {send, Message}).
 
 init(Socket) ->
     {ok, Socket}.
@@ -32,8 +32,8 @@ init(Socket) ->
 handle_call(_, _, Socket) ->
     {stop, not_used, Socket}.
 
-handle_cast({send_message, Message},  Socket) ->
-    message:send_message(Message),
+handle_cast({send, Message}, Socket) ->
+    ok = message:send(Socket, Message),
     {noreply, Socket}.
 
 handle_info(_, Socket) ->

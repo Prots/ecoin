@@ -4,6 +4,8 @@
 
 -behaviour(gen_server).
 
+-export([connected_peers/0]).
+
 -export([new_peers/1,
          connected/1,
          start_link/0]).
@@ -24,6 +26,15 @@
           outgoing :: non_neg_integer(),
           limit    :: pos_integer()
          }).
+
+-type connected_peers() :: [connected_peer()].
+-type connected_peer()  :: {pid(), connecting, address(), timestamp()} |
+                           {pid(), connected, #version{}, timestamp()}.
+
+%% @doc Return a list of all connected peers
+-spec connected_peers() -> connected_peers().
+connected_peers() ->
+    ets:tab2list(?CONN_TAB).
 
 %% @doc Supply the manager with new peers
 -spec new_peers([address()]) -> ok.
@@ -46,15 +57,17 @@ init([]) ->
     PredefinedPeers = config:predefined_peers(),
     DNS             = config:dns(),
 
+    ?CONN_TAB = ets:new(?CONN_TAB, [named_table]),
+
     lager:info("Starting the peer manager with connection limit: ~p",
                [ConnectionLimit]),
     lager:info("Predefined peers: ~p", [PredefinedPeers]),
 
     lager:info("Seeding with peers from given dns: ~p", [DNS]),
-    spawn(ecoin_util, get_peers_dns, [DNS]),
+    DNSPeers = ecoin_util:get_peers_dns(DNS),
 
     State = #state{
-               peers    = PredefinedPeers,
+               peers    = PredefinedPeers ++ DNSPeers,
                outgoing = 0,
                limit    = ConnectionLimit
               },
@@ -79,15 +92,16 @@ handle_cast({new_peers, NewPeers}, State) ->
             {noreply, State1}
     end;
 handle_cast({connected, Pid, Version}, State) ->
-    [{Pid, Peer, connecting, undefined}] = ets:lookup(?CONN_TAB, Pid),
-    ets:insert(?CONN_TAB, {Pid, Peer, connected, Version}),
+    [{Pid, _Peer, connecting, undefined}] = ets:lookup(?CONN_TAB, Pid),
+    ets:insert(?CONN_TAB, {Pid, connected, Version, now()}),
     {noreply, State}.
 
 handle_info({'DOWN', _Ref, process, Pid, Reason}, State) ->
     #state{outgoing = Outgoing} = State,
-    [{_Pid, Peer, PeerState, _Version}] = ets:lookup(?CONN_TAB, Pid),
-    lager:info("Peer ~p (~p) in state ~p died with reason: ~p.",
-               [Peer, Pid, PeerState, Reason]),
+    [{Pid, PeerState, Version, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
+    #version{addr_from = #net_addr{ip = IP, port = Port}} = Version,
+    lager:info("Peer ~p (~p) [~p] died with reason: ~p.",
+               [{IP, Port}, Pid, PeerState, Reason]),
     ets:delete(?CONN_TAB, Pid),
     {noreply, State#state{outgoing = Outgoing - 1}, 0};
 handle_info(timeout, State) ->
@@ -121,4 +135,4 @@ code_change(_, State, _) ->
 new_peer(Peer) ->
     {ok, Pid} = peer_sup:new_peer(Peer),
     monitor(process, Pid),
-    ets:insert_new(?CONN_TAB, {Pid, Peer, connecting, undefined}).
+    ets:insert_new(?CONN_TAB, {Pid, connecting, Peer, now()}).

@@ -14,6 +14,5 @@ encode(#notfound{inventory = Inventory}) ->
 -spec decode(binary()) -> #notfound{}.
 decode(Binary) ->
     #notfound{
-       inventory = protocol:decode_array(Binary, 36,
-                                         fun inv:decode_inv_vect/1)
+       inventory = protocol:decode_array(Binary, fun inv:decode_inv_vect/1)
       }.

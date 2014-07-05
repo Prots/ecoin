@@ -10,8 +10,7 @@
 encode(Version, Locator, HashStop) ->
     [
      <<Version:32/little>>,
-     protocol:encode_varuint(length(Locator)),
-     Locator,
+     protocol:encode_array(Locator, fun(Hash) -> Hash end),
      HashStop
     ].
 
@@ -23,6 +22,9 @@ decode(<<Version:32/little, Binary/binary>>) ->
     <<Hashes:Size/binary, HashStop:4/binary>> = Binary1,
     {
      Version,
-     protocol:decode_array(Hashes, 32, fun(Hash) -> Hash end),
+     protocol:decode_array(Hashes,
+                           fun(<<Hash:32/binary, Rest/binary>>) ->
+                                   {Hash, Rest}
+                           end),
      HashStop
     }.

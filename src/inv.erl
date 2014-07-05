@@ -12,14 +12,13 @@
 %% @doc Encode an inv message
 -spec encode(#inv{}) -> iodata().
 encode(#inv{inventory = Inventory}) ->
-    protocol:encode_array(Inventory, fun encode/1).
+    protocol:encode_array(Inventory, fun encode_inv_vect/1).
 
 %% @doc Decode an inv message
 -spec decode(binary()) -> #inv{}.
 decode(Binary) ->
-    #inv{
-       inventory = protocol:decode_array(Binary, 36, fun decode_inv_vect/1)
-      }.
+    {Inventory, <<>>} = protocol:decode_array(Binary, fun decode_inv_vect/1),
+    #inv{inventory = Inventory}.
 
 %% @doc Encode an inv_vect structure
 -spec encode_inv_vect(#inv_vect{})   -> iodata().
@@ -27,9 +26,9 @@ encode_inv_vect(#inv_vect{type = ObjectType, hash = Hash}) ->
     [<<(encode_object_type(ObjectType)):32/little>>, Hash].
 
 %% @doc Decode an inv_vect structure
--spec decode_inv_vect(<<_:288>>) -> #inv_vect{}.
-decode_inv_vect(<<ObjectType:32/little, Hash:32/binary>>) ->
-    #inv_vect{type = decode_object_type(ObjectType), hash = Hash}.
+-spec decode_inv_vect(<<_:288, _:_*8>>) -> {#inv_vect{}, binary()}.
+decode_inv_vect(<<ObjectType:32/little, Hash:32/binary, Rest/binary>>) ->
+    {#inv_vect{type = decode_object_type(ObjectType), hash = Hash}, Rest}.
 
 %% @doc Encode an object type
 -spec encode_object_type(object_type()) -> 0..3.

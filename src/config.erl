@@ -2,6 +2,8 @@
 
 -export([network/0,
          protocol_version/0,
+         set_ip/1,
+         ip/0,
          port/0,
          predefined_peers/0,
          dns/0,
@@ -18,6 +20,12 @@ network() ->
 
 protocol_version() -> 
     conf(protocol_version, 70002).
+
+set_ip(IP) ->
+    application:set_env(ecoin, ip, IP).
+
+ip() ->
+    conf(ip, {127,0,0,1}).
 
 port() ->
     conf(port, 8333).

@@ -59,8 +59,11 @@ new(Payload) ->
 -spec new(network(), payload()) -> #message{}.
 new(Network, NoPayload) when is_atom(NoPayload) ->
     #message{
-       network = Network,
-       command = NoPayload
+       network  = Network,
+       command  = NoPayload,
+       length   = 0,
+       checksum = compute_checksum(<<>>),
+       payload  = <<>>
       };
 new(Network, Payload) ->
     #message{
@@ -75,17 +78,15 @@ encode(#message{
           command  = Command,
           length   = undefined,
           checksum = undefined,
-          payload  = Message
+          payload  = Payload
          } = Message) ->
-    Payload = case command_has_payload(Command) of
-                  true  -> iolist_to_binary(Command:encode(Message));
-                  false -> <<>>
-              end,
+    true = command_has_payload(Command),
+    EncodedPayload = iolist_to_binary(Command:encode(Payload)),
     encode(
       Message#message{
-        length   = byte_size(Payload),
-        checksum = compute_checksum(Payload),
-        payload  = Payload
+        length   = byte_size(EncodedPayload),
+        checksum = compute_checksum(EncodedPayload),
+        payload  = EncodedPayload
        });
 encode(#message{
           network  = Network,

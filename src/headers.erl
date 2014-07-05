@@ -13,4 +13,4 @@ encode(#headers{headers = Headers}) ->
 %% @doc Decode a headers message
 -spec decode(binary()) -> #headers{}.
 decode(Binary) ->
-    #headers{headers = protocol:decode_array(Binary, 81, fun block:decode/1)}.
+    #headers{headers = protocol:decode_array(Binary, fun block:decode/1)}.

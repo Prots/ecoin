@@ -27,6 +27,7 @@ nounce(Bytes) ->
 in_mask(I, M) -> M /= (I bxor M).
 
 %% @doc Get the external ip of this computer
+-spec get_external_ip() -> inet:ip_address().
 get_external_ip() ->
     inets:start(),
     {ok, {_, _, Html}} = httpc:request("http://checkip.dyndns.org"),
@@ -35,13 +36,20 @@ get_external_ip() ->
     IPString = lists:takewhile(fun(X) -> X/= $< end, Rest),
     inet:parse_ipv4_address(IPString).
 
-%% @doc Retrive bootstrapping peers from dns servers
+%% @doc Retrive bootstrapping peers from dns server(s)
+-type hostaddr() :: inet:hostname() | inet:ip_address().
+-spec get_peers_dns([hostaddr()] | hostaddr()) ->
+    [{inet:ip_address(), inet:port_number()}].
+get_peers_dns(DNSs) when is_list(DNSs) ->
+        Port = case config:network() of
+              main     -> 8333;
+              testnet3 -> 18333
+           end, 
+        SuccessZip = fun({ok, IPs}) ->
+                             {true, lists:map(fun(IP) -> {IP, Port} end, IPs)};
+                        (_) -> false
+                     end,
+    Result = [inet:getaddrs(Host, inet) || Host <- DNSs],
+    lists:flatten(lists:filtermap(SuccessZip, Result));
 get_peers_dns(DNS) ->
-    Success = fun({ok, _}) -> true;
-                 (_)       -> false
-              end,
-    {ok, Port} = application:get_env(port),
-    Result = [inet:getaddr(Host, inet) || Host <- DNS],
-    Peers = [{IP, Port} || {ok, IP} <- lists:filter(Success, Result)],
-    peer_man:new_peers(Peers).
-
+    get_peers_dns([DNS]).
