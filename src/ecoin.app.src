@@ -1,3 +1,4 @@
+% vim: set filetype=erlang :
 {application, ecoin, [
     {description, "Bitcoin daemon writted in Erlang."},
     {vsn, "0.0.1"},
@@ -14,14 +15,16 @@
     {mod, {ecoin_app, []}},
     {env, [
         {exometer_defaults, [
-            {[messages, in,  num,  peer, '_'], counter, []},
-            {[messages, in,  size, peer, '_'], counter, []},
-            {[messages, out, num,  peer, '_'], counter, []},
-            {[messages, out, size, peer, '_'], counter, []}
+            {[messages, in,  num,  '_'], counter, []},
+            {[messages, in,  size, '_'], counter, []},
+            {[messages, out, num,  '_'], counter, []},
+            {[messages, out, size, '_'], counter, []}
         ]},
         {exometer_predefined, [
-            {[messages, in,  total], counter, []},
-            {[messages, out, total], counter, []}
+            {[messages, in,  num],
+             {function, exometer, aggregate, [ [{{[messages, in,  num, '_'], counter, '_'}, [], [true]}], [value] ], value, [value]}, []},
+            {[messages, out, num],
+             {function, exometer, aggregate, [ [{{[messages, out, num, '_'], counter, '_'}, [], [true]}], [value] ], value, [value]}, []}
         ]}
     ]}
 ]}.
