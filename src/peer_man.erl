@@ -20,8 +20,6 @@
 
 -include("ecoin.hrl").
 
--define(CONN_TAB, ecoin_connection_tab).
-
 -record(state, {
           peers    :: [address()],
           outgoing :: uinteger(),
@@ -38,7 +36,7 @@ active_peers() ->
 inactive_peers() ->
     gen_server:call(?MODULE, inactive_peers).
 
--spec new_peers([address()]) -> ok.
+-spec new_peers([#net_addr{}]) -> ok.
 new_peers(Peers) ->
     gen_server:cast(?MODULE, {new_peers, Peers}).
 
@@ -57,11 +55,17 @@ start_link() ->
 init([]) ->
     ConnectionLimit = config:outgoing_limit(),
     PredefinedPeers = config:predefined_peers(),
+    Peers = PredefinedPeers ++ ecoin_util:dns_peers(),
+    ToNetAddr = fun ({IP, Port}) ->
+                        #net_addr{ip   = IP,
+                                  port = Port}
+                end,
+    Peers1 =lists:map(ToNetAddr, Peers),
 
     ?CONN_TAB = ets:new(?CONN_TAB, [named_table]),
 
     State = #state{
-               peers    = PredefinedPeers ++ ecoin_util:dns_peers(),
+               peers    = Peers1,
                outgoing = 0,
                limit    = ConnectionLimit
               },
@@ -86,18 +90,16 @@ handle_cast({new_peers, NewPeers}, State) ->
             {noreply, State1}
     end;
 handle_cast({connected, Pid, Version}, State) ->
-    [{Pid, connecting, _Peer, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
+    [{Pid, connecting, _NetAddr, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
     ets:insert(?CONN_TAB, {Pid, connected, Version, now()}),
     {noreply, State}.
 
 handle_info({'DOWN', _Ref, process, Pid, Reason}, State) ->
     #state{outgoing = Outgoing} = State,
-    [{Pid, PeerState, VersionOrAddress, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
-    Peer = case VersionOrAddress of
-               #version{addr_from = NetAddr} ->
-                   {NetAddr#net_addr.ip, NetAddr#net_addr.port};
-               Address ->
-                   Address
+    [{Pid, PeerState, PeerData, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
+    Peer = case PeerData of
+               #version{addr_from = NetAddr} -> NetAddr;
+               #net_addr{}                   -> PeerData
            end,
     lager:info("Peer ~p (~p) [~p] died with reason: ~p.",
                [Peer, Pid, PeerState, Reason]),
@@ -130,7 +132,7 @@ code_change(_, State, _) ->
 
 %% @doc Spawn a new peer process, monitor it and add it to the
 %%      connection table
--spec new_peer(address()) -> true.
+-spec new_peer(#net_addr{}) -> true.
 new_peer(Peer) ->
     {ok, Pid} = peer_sup:new_peer(Peer),
     monitor(process, Pid),

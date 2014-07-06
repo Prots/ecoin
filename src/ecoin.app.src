@@ -2,13 +2,26 @@
     {description, "Bitcoin daemon writted in Erlang."},
     {vsn, "0.0.1"},
     {modules, []},
-    {registered, [ecoin_sup]},
+    {registered, []},
     {applications, [
         kernel,
         stdlib,
         crypto,
+        exometer,
         lager,
         ranch
     ]},
-    {mod, {ecoin_app, []}}
+    {mod, {ecoin_app, []}},
+    {env, [
+        {exometer_defaults, [
+            {[messages, in,  num,  peer, '_'], counter, []},
+            {[messages, in,  size, peer, '_'], counter, []},
+            {[messages, out, num,  peer, '_'], counter, []},
+            {[messages, out, size, peer, '_'], counter, []}
+        ]},
+        {exometer_predefined, [
+            {[messages, in,  total], counter, []},
+            {[messages, out, total], counter, []}
+        ]}
+    ]}
 ]}.

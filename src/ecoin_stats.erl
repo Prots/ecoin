@@ -1,50 +1,34 @@
 -module(ecoin_stats).
 
--behaviour(gen_server).
+-export([create/1,
+         sent/3,
+         received/3]).
 
--export([incoming/3,
-         outgoing/3,
-         start_link/0]).
+-include("ecoin.hrl").
 
--export([init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3]).
+%% @doc Create all statistics entries we want for a new peer.
+%%      Since there are multiple processes invloved we
+%%      key everything on the socket.
+-spec create(socket()) -> ok.
+create(Socket) ->
+    exometer:new([messages, in,  num,  peer, Socket], counter),
+    exometer:new([messages, in,  size, peer, Socket], counter),
+    exometer:new([messages, out, num,  peer, Socket], counter),
+    exometer:new([messages, out, size, peer, Socket], counter).
 
--define(STATS_TAB, ecoin_statistics_tab).
+%% @doc Log sent messages type and size
+-spec sent(socket(), command(), uinteger()) -> ok.
+sent(Socket, Command, Length) ->
+    on_message(Socket, out, Command, Length).
 
-incoming(CtlPid, Command, Length) ->
-    gen_server:cast(?MODULE, {incoming, CtlPid, Command, Length}).
+%% @doc Log received messages type and size
+-spec received(socket(), command(), uinteger()) -> ok.
+received(Socket, Command, Length) ->
+    on_message(Socket, in, Command, Length).
 
-outgoing(CtlPid, Command, Length) ->
-    gen_server:cast(?MODULE, {outgoing, CtlPid, Command, Length}).
-
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-init([]) ->
-    ?STATS_TAB = ets:new(?STATS_TAB, [named_table]),
-    Counters = [
-                {incoming, 0},
-                {outgoing, 0}
-               ],
-    true = ets:insert_new(?STATS_TAB, Counters),
-    {ok, nostate}.
-
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+%% @doc Helper for sent and received
+-spec on_message(socket(), in | out, command(), uinteger()) -> ok.
+on_message(Socket, Dir, Command, Length) ->
+    exometer:update([messages, Dir, num,  peer, Socket], 1),
+    exometer:update([messages, Dir, size, peer, Socket], 24 + Length),
+    exometer:update([messages, Dir, Command], 1).

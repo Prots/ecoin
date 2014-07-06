@@ -14,9 +14,14 @@
 -spec send(socket(), #message{}) -> ok;
           (socket(), payload())  -> ok.
 send(Socket, Message) when is_record(Message, message) ->
-    lager:info("Sending message: ~p", [Message]),
-    ranch_tcp:send(Socket, encode(Message));
-send(Socket, Payload) -> 
+    ok = ranch_tcp:send(Socket, encode(Message)),
+    #message{
+      command = Command,
+      length  = Length
+      } = Message,
+    ecoin_stats:sent(Socket, Command, Length),
+    ok;
+send(Socket, Payload) ->
     send(Socket, new(Payload)).
 
 %% @doc Receive a message over a socket
@@ -49,9 +54,8 @@ recv(Socket, Timeout) ->
                       true = checksum_is_valid(Checksum, Data),
                       Command:decode(Data)
               end,
-    Message1 = Message#message{payload = Payload},
-    lager:info("Received message: ~p", [Message1]),
-    Message1.
+    ecoin_stats:received(Socket, Command, Length),
+    Message#message{payload = Payload}.
 
 %% @doc Create a new message with given payload on main network
 -spec new(payload()) -> #message{}.
@@ -60,37 +64,27 @@ new(Payload) ->
 
 %% @doc Create a new message with given payload and network
 -spec new(network(), payload()) -> #message{}.
-new(Network, NoPayload) when is_atom(NoPayload) ->
+new(Network, Command) when is_atom(Command) ->
     #message{
        network  = Network,
-       command  = NoPayload,
+       command  = Command,
        length   = 0,
        checksum = compute_checksum(<<>>),
        payload  = <<>>
       };
 new(Network, Payload) ->
+    Command = element(1, Payload),
+    EncodedPayload = iolist_to_binary(Command:encode(Payload)),
     #message{
-       network = Network,
-       command = element(1, Payload),
-       payload = Payload
+       network  = Network,
+       command  = Command,
+       length   = byte_size(EncodedPayload),
+       checksum = compute_checksum(EncodedPayload),
+       payload  = EncodedPayload
       }.
 
 %% @doc Encode a message
 -spec encode(#message{}) -> message_bin().
-encode(#message{
-          command  = Command,
-          length   = undefined,
-          checksum = undefined,
-          payload  = Payload
-         } = Message) ->
-    true = command_has_payload(Command),
-    EncodedPayload = iolist_to_binary(Command:encode(Payload)),
-    encode(
-      Message#message{
-        length   = byte_size(EncodedPayload),
-        checksum = compute_checksum(EncodedPayload),
-        payload  = EncodedPayload
-       });
 encode(#message{
           network  = Network,
           command  = Command,
@@ -98,13 +92,13 @@ encode(#message{
           checksum = Checksum,
           payload  = Payload
          }) ->
-    <<
-      (encode_network(Network)):32/little,
-      (encode_command(Command))/binary,
-      Length:32/little,
-      Checksum/binary,
-      Payload/binary
-    >>.
+    [
+     <<(encode_network(Network)):32/little>>,
+     encode_command(Command),
+     <<Length:32/little>>,
+     Checksum,
+     Payload
+    ].
 
 %% @doc Decode a message header
 -spec decode(message_header_bin()) -> #message{}.

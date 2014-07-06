@@ -1,6 +1,9 @@
 %%
 %% Defines
 %%
+
+-define(CONN_TAB, ecoin_connection_tab).
+
 -define(NETWORK_MAIN, 16#D9B4BEF9).
 -define(NETWORK_TESTNET, 16#DAB5BFFA).
 -define(NETWORK_TESTNET3, 16#0709110B).

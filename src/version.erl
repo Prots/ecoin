@@ -12,22 +12,18 @@
 
 %% @doc Create a new version message depending on
 %%      the configuration and the state of client(start_height).
--spec new(address()) -> #version{}.
-new({IP, Port}) ->
+-spec new(#net_addr{}) -> #version{}.
+new(Peer) ->
     Services = config:services(),
     #version{
        version   = config:protocol_version(),
        services  = Services,
        timestamp = now(),
-       addr_recv = #net_addr{
-                      ip       = IP,
-                      port     = Port,
-                      services = []
-                     },
+       addr_recv = Peer,
        addr_from = #net_addr{
+                      services = Services,
                       ip       = config:ip(),
-                      port     = config:port(),
-                      services = Services
+                      port     = config:port()
                      },
        nounce       = ecoin_util:nounce(4),
        user_agent   = config:user_agent(),
@@ -117,7 +113,9 @@ all_services() -> [node_network].
 service_to_integer(node_network) -> ?SERVICE_NODE_NETWORK.
 
 %% @doc Encode a services field
--spec encode_services(services()) -> <<_:64>>.
+-spec encode_services(undefined | services()) -> <<_:64>>.
+encode_services(undefined) ->
+    encode_services([]);
 encode_services(Services) ->
     Int = lists:foldl(fun erlang:'bor'/2, 0,
                       lists:map(fun service_to_integer/1, Services)),

@@ -32,15 +32,22 @@ send(Peer, Message) ->
     gen_server:cast(Peer, {send, Message}).
 
 %% @doc Start a new outgoing peer process
--spec start_link(address()) -> {ok, pid()}.
+-spec start_link(#net_addr{}) -> {ok, pid()}.
 start_link(Peer) ->
     proc_lib:start_link(?MODULE, init, [Peer]).
 
--spec init(address()) -> {ok, #state{}}.
-init({IP, Port} = Peer) ->
+-spec init(#net_addr{}) -> {ok, #state{}}.
+init(#net_addr{
+        ip   = IP,
+        port = Port
+       } = Peer) ->
     ok = proc_lib:init_ack({ok, self()}),
 
+    %% Connect to peer
     {ok, Socket} = ranch_tcp:connect(IP, Port, [], config:connection_timeout()),
+
+    %% Create statistics this peer, we key it on the socket
+    ecoin_stats:create(Socket),
 
     %% Do the handshake and keep the peers version
     Version = handshake(Socket, Peer),
@@ -84,11 +91,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%        * Check if connection to self
 %%      - TODO: Validate peer version
 %%      - Send and receive veracks
--spec handshake(socket(), address()) -> #version{}.
+-spec handshake(socket(), #net_addr{}) -> #version{}.
 handshake(Socket, Peer) ->
-    %% Get which network we are on
-    Network   = config:network(),
-
     %% Create and send our version
     MyVersion = version:new(Peer),
     ok = message:send(Socket, MyVersion),
