@@ -6,7 +6,16 @@
 -export([new_env/1,
          new_env/3,
          run/1,
-         run/6]).
+         run/6,
+         pp/1]).
+
+-export([encode/1,
+         encode_op/1,
+         encode_value/1,
+         encode_bool/1,
+         decode_bool/1,
+         encode_varint/1,
+         decode_varint/1]).
 
 -record(env, {
           tx         :: #tx{},
@@ -493,12 +502,12 @@ encode_varint(UInt, Sign) ->
     Bin0 = binary:encode_unsigned(UInt, little),
     %% Pad with an extra byte if it overflows
     case bit7(binary:last(Bin0)) of
-        one ->
+        true ->
             case Sign of
                 positive -> <<Bin0/binary, 0>>;
                 negative -> <<Bin0/binary, 16#80>>
             end;
-        zero ->
+        false ->
             case Sign of
                 positive -> Bin0;
                 negative ->
@@ -533,13 +542,13 @@ decode_varint(_) ->
 -spec bit7(byte()) -> boolean().
 bit7(Byte) -> Byte band 16#80 == 16#80.
 
-%% @doc Pretty print an operation
--spec to_binary(byte()) -> binary().
-to_binary(<<Size, Data:Size/binary, Script/binary>>) when ?OP_PUSHDATA(Size) ->
+%% @doc Pretty print a script
+-spec pp(binary()) -> binary().
+pp(<<Size, Data:Size/binary, Script/binary>>) when ?OP_PUSHDATA(Size) ->
     [<<"PUSH0: ", Data/binary>>,
      $\n,
-     to_binary(Script)];
-to_binary(<<Op, Script/binary>>) when Op == ?OP_PUSHDATA1;
+     pp(Script)];
+pp(<<Op, Script/binary>>) when Op == ?OP_PUSHDATA1;
                                       Op == ?OP_PUSHDATA2;
                                       Op == ?OP_PUSHDATA4 ->
     SizeBytes = case Op of
@@ -551,8 +560,8 @@ to_binary(<<Op, Script/binary>>) when Op == ?OP_PUSHDATA1;
     <<Size:SizeBits/little, Data:Size/binary, Script1/binary>> = Script,
     [<<"PUSH", (integer_to_binary(SizeBytes))/binary, Data/binary>>,
      $\n,
-     to_binary(Script1)];
-to_binary(<<Op, Script/binary>>) ->
+     pp(Script1)];
+pp(<<Op, Script/binary>>) ->
     [case Op of
          ?OP_IF                  -> <<"IF">>;
          ?OP_NOTIF               -> <<"NOT IF">>;
@@ -632,4 +641,31 @@ to_binary(<<Op, Script/binary>>) ->
          ?OP_CHECKMULTISIG       -> <<"CHECK MULTISIGNATURE">>;
          ?OP_CHECKMULTISIGVERIFY -> <<"CHECK MULTISIGNATURE THEN VERIFY">>
      end, $\n,
-     to_binary(Script)].
+     pp(Script)].
+
+%% @doc Encode a script
+%%      TODO: BARLEY STARTED
+-spec encode([stack_operation()]) -> binary().
+encode(Script) -> lists:map(fun encode_op/1, Script).
+
+%% @doc Encode a script operation
+-spec encode_op(script_operation()) -> iodata().
+encode_op({push, Data}) when is_boolean(Data);
+                             is_integer(Data);
+                             is_binary(Data) ->
+    Binary = encode_value(Data),
+    Size = byte_size(Binary),
+    false = (Size > ?MAX_SCRIPT_ELEMENT_SIZE),
+    encode_pushdata(Size, Binary).
+
+%% @doc Encode a push data operation into one
+%%      of the available push op codes
+-spec encode_pushdata(uinteger(), binary()) -> binary().
+encode_pushdata(Size, Data) when Size < ?OP_PUSHDATA1 ->
+    <<Size, Data/binary>>;
+encode_pushdata(Size, Data) when Size =< 16#FF ->
+    <<?OP_PUSHDATA1, Size, Data/binary>>;
+encode_pushdata(Size, Data) when Size =< 16#FFFF ->
+    <<?OP_PUSHDATA2, Size:16/little, Data/binary>>;
+encode_pushdata(Size, Data) when Size =< 16#FFFFFFFF ->
+    <<?OP_PUSHDATA4, Size:32/little, Data/binary>>.

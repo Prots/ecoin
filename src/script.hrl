@@ -1,3 +1,7 @@
+%% General
+-define(MAX_SCRIPT_ELEMENT_SIZE, 520).
+-define(MAX_OP_RETURN_RELAY, 40).
+
 %% Constants
 -define(OP_TRUE, 81).
 -define(OP_FALSE, 0).
@@ -139,3 +143,5 @@
 -define(SIGHASH_NONE, 16#00000002).
 -define(SIGHASH_SINGLE, 16#00000003).
 -define(SIGHASH_ANYONECANPAY, 16#00000080).
+
+-type script_operation() :: {push, Data :: boolean() | integer() | binary()}.

@@ -2,6 +2,23 @@
 %% Defines
 %%
 
+-define(GENESIS_HASH,
+        <<
+          16#000000000019D6689C085AE165831E93:128,
+          16#4FF763AE46A2A6C172B3F1B60A8CE26F:128,
+        >>
+       ).
+
+-define(GENESIS_MERKLE_ROOT,
+        <<
+          16#4a5e1e4baab89f3a32518a88c31bc87f:128,
+          16#618f76673e2cc77ab2127b7afdeda33b:128
+        >>
+       ).
+
+-define(COIN, 100000000).
+-define(MAX_MONEY, 21000000).
+
 -define(CONN_TAB, ecoin_connection_tab).
 
 -define(NETWORK_MAIN, 16#D9B4BEF9).
@@ -46,7 +63,7 @@
           length   :: length(),
           checksum :: checksum(),
           payload  :: payload()
-         }).  
+         }).
 
 -record(net_addr, {
           time     :: integer(),
@@ -66,11 +83,11 @@
           timestamp    :: timestamp(),
           addr_recv    :: #net_addr{},
           addr_from    :: #net_addr{},
-          nounce       :: uinteger(), 
-          user_agent   :: string(), 
-          start_height :: integer(), 
+          nounce       :: uinteger(),
+          user_agent   :: string(),
+          start_height :: integer(),
           relay        :: boolean()
-         }).  
+         }).
 
 -record(verack, {}).
 
@@ -266,3 +283,6 @@
 -type active_peer()  ::
           {pid(), connecting, address(), timestamp()} |
           {pid(), connected, #version{}, timestamp()}.
+
+-type script() :: [stack_operation()].
+-type stack_operation() :: term().

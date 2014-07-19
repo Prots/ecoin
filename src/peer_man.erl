@@ -79,20 +79,24 @@ handle_cast({new_peers, NewPeers}, State) ->
 
     #state{
        peers    = Peers,
-       outgoing = Outgoing, 
+       outgoing = Outgoing,
        limit    = ConnectionLimit
       } = State,
     State1 = State#state{peers = Peers ++ NewPeers},
     case Outgoing < ConnectionLimit of
-        true -> 
+        true ->
             {noreply, State1, 0};
         false ->
             {noreply, State1}
     end;
 handle_cast({connected, Pid, Version}, State) ->
-    [{Pid, connecting, _NetAddr, _Timestamp}] = ets:lookup(?CONN_TAB, Pid),
-    ets:insert(?CONN_TAB, {Pid, connected, Version, now()}),
-    {noreply, State}.
+     case ets:lookup(?CONN_TAB, Pid) of
+         [{Pid, connecting, _NetAddr, _Timestamp}] ->
+             ets:insert(?CONN_TAB, {Pid, connected, Version, now()}),
+             {noreply, State};
+         [] ->
+            {noreply, State}
+     end.
 
 handle_info({'DOWN', _Ref, process, Pid, Reason}, State) ->
     #state{outgoing = Outgoing} = State,
