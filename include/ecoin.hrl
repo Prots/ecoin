@@ -1,3 +1,5 @@
+-include("script.hrl").
+
 %%
 %% Defines
 %%
@@ -118,13 +120,13 @@
 
 -record(tx_in, {
           previous_output :: #outpoint{},
-          script          :: binary(),
+          sig_script      :: script() | script_raw(),
           sequence        :: uinteger()
          }).
 
 -record(tx_out, {
           value  :: integer(),
-          script :: binary()
+          pk_script :: script() | script_raw()
          }).
 
 -record(tx, {
@@ -199,12 +201,12 @@
           reserved    :: binary()
          }).
 
--type network() :: main | testnet | testnet3 | namecoin. 
+-type network() :: main | testnet | testnet3 | namecoin.
 -type magic() :: ?NETWORK_MAIN | ?NETWORK_TESTNET |
                  ?NETWORK_TESTNET3 | ?NETWORK_NAMECOIN.
 
 -type command_bin() :: <<_:96>>.
--type command_without_payload() :: 
+-type command_without_payload() ::
           verack |
           getaddr |
           mempool |
@@ -284,5 +286,5 @@
           {pid(), connecting, address(), timestamp()} |
           {pid(), connected, #version{}, timestamp()}.
 
--type script() :: [stack_operation()].
--type stack_operation() :: term().
+-type public_key() :: <<_:520>>.
+-type private_key() :: <<_:256>>.

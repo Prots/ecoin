@@ -1,24 +1,27 @@
 -module(ecoin_util).
 
--export([timestamp_to_integer/1,
-         integer_to_timestamp/1,
+-export([ts_to_int/1,
+         int_to_ts/1,
          nounce/1,
          in_mask/2,
          get_external_ip/0,
          dns_peers/0,
-         dns_peers/2]).
+         dns_peers/2,
+         bin_to_hexstr/1,
+         hexstr_to_bin/1,
+         ts_to_bin/1]).
 
 -type address() :: {inet:ip_address(), inet:port_number()}.
 -type hostaddr() :: inet:hostname() | inet:ip_address().
 
 %% @doc Convert a timestamp into a single big integer
--spec timestamp_to_integer(erlang:timestamp()) -> non_neg_integer().
-timestamp_to_integer({MSecs, Secs, _}) -> 
+-spec ts_to_int(erlang:timestamp()) -> non_neg_integer().
+ts_to_int({MSecs, Secs, _}) ->
     MSecs*1000000+Secs.
 
 %% @doc Convert a single big integer timestamp into an erlang timestamp
--spec integer_to_timestamp(non_neg_integer()) -> erlang:timestamp().
-integer_to_timestamp(Secs) ->
+-spec int_to_ts(non_neg_integer()) -> erlang:timestamp().
+int_to_ts(Secs) ->
     {Secs div 1000000, Secs rem 1000000, 0}.
 
 %% @doc Get a random nounce of given maximum length in bytes
@@ -52,7 +55,7 @@ dns_peers() ->
 dns_peers(DNSs, DNSLimit) when is_list(DNSs) ->
         Port = config:default_port(),
         AccDNS = fun (_DNS, {Acc, 0}) ->
-                         {Acc, 0}; 
+                         {Acc, 0};
                      (DNS, {Acc, Left}) ->
                          try
                              {ok, IPs} = inet:getaddrs(DNS, inet),
@@ -74,3 +77,34 @@ dns_peers(DNSs, DNSLimit) when is_list(DNSs) ->
         DNSPeers;
 dns_peers(DNS, DNSLimit) ->
     dns_peers([DNS], DNSLimit).
+
+%% @doc Turn a binary into a hexadecimal string
+-spec bin_to_hexstr(binary()) -> string().
+bin_to_hexstr(Bin) ->
+  list_to_binary(lists:flatten([io_lib:format("~2.16.0B", [X]) ||
+                                X <- binary_to_list(Bin)])).
+
+%% @doc Turn a hexadecimal string into a binary
+-spec hexstr_to_bin(binary()) -> binary().
+hexstr_to_bin(HexStr) ->
+  hexstr_to_bin(binary_to_list(HexStr), []).
+
+hexstr_to_bin([], Acc) ->
+  list_to_binary(lists:reverse(Acc));
+hexstr_to_bin([X,Y|T], Acc) ->
+  {ok, [V], []} = io_lib:fread("~16u", [X,Y]),
+  hexstr_to_bin(T, [V | Acc]).
+
+ts_to_bin(Timestamp) ->
+    {Date, Time} = calendar:now_to_universal_time(Timestamp),
+    {Year, Month, Day} = Date,
+    {Hour ,Minute, Second} = Time,
+    <<
+      (integer_to_binary(Year))/binary, "-",
+      (integer_to_binary(Month))/binary, "-",
+      (integer_to_binary(Day))/binary, " ",
+      (integer_to_binary(Hour))/binary, ":",
+      (integer_to_binary(Minute))/binary, ":",
+      (integer_to_binary(Second))/binary
+    >>.
+

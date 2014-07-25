@@ -1,5 +1,5 @@
 %% General
--define(MAX_SCRIPT_ELEMENT_SIZE, 520).
+-define(MAX_ELEMENT_SIZE, 520).
 -define(MAX_OP_RETURN_RELAY, 40).
 
 %% Constants
@@ -144,4 +144,56 @@
 -define(SIGHASH_SINGLE, 16#00000003).
 -define(SIGHASH_ANYONECANPAY, 16#00000080).
 
--type script_operation() :: {push, Data :: boolean() | integer() | binary()}.
+-type constants_operation() ::
+          boolean() | integer() | binary().
+
+-type flow_control_operation() ::
+          'if' | nif | else | endif |
+          nop | verify | return.
+
+-type stack_operation() ::
+          depth | toaltstack | fromaltstack |
+          nip | pick | roll | tuck | ifdup |
+          {dup,  1..3} |
+          {drop, 1..2} |
+          {over, 1..2} |
+          {rot,  1..2} |
+          {swap, 1..2}.
+
+-type splice_operation() ::
+          cat | substr | left | right | size.
+
+-type bitwise_operation() ::
+          invert | 'and' | 'or' | 'xor' |
+          equal | equalverify.
+
+-type arithmetic_operation() ::
+          add1 | sub1 |
+          add | sub |
+          mul2 | div2 | lshift | rshift |
+          mul | 'div' | mod |
+          negate | abs | notequal0 |
+          'not' | booland | boolor |
+          numequal | numequalverify | numnotequal |
+          lessthan | greaterthan |
+          lessthanorequal | greaterthanorequal |
+          min | max | within.
+
+-type crypto_operation() ::
+          codeseparator |
+          ripemd160 | sha1 | sha256 | hash160 | hash256 |
+          checksig | checksigverify |
+          checkmultisig | checkmultisigverify.
+
+-type script_operation() ::
+          constants_operation() |
+          flow_control_operation() |
+          stack_operation() |
+          splice_operation () |
+          bitwise_operation() |
+          arithmetic_operation() |
+          crypto_operation().
+
+-type script_enum() :: pk_script | sig_script.
+-type script_raw() :: binary().
+-type script() :: [script_operation].
