@@ -40,7 +40,7 @@ encode_net_addr(NetAddr) ->
             ip       = IPAddr,
             port     = Port
            } = NetAddr,
-     <<(ecoin_util:timestamp_to_integer(Time)):32/little,
+     <<(ecoin_util:ts_to_int(Time)):32/little,
        (ecoin_version:encode_services(Services))/binary,
        (encode_ipaddress(IPAddr))/binary,
        Port:16>>.
@@ -52,7 +52,7 @@ decode_net_addr(<<Time:32/little,
                   Services:8/binary,
                   IPAddr:16/binary,
                   Port:16, Rest/binary>>) ->
-    NetAddr = #net_addr{time     = ecoin_util:integer_to_timestamp(Time),
+    NetAddr = #net_addr{time     = ecoin_util:int_to_ts(Time),
                         services = ecoin_version:decode_services(Services),
                         ip       = decode_ipaddress(IPAddr),
                         port     = Port
@@ -73,32 +73,3 @@ encode_ipaddress({I0, I1, I2, I3, I4, I5, I6, I7}) ->
 -spec decode_ipaddress(<<_:128>>) -> ipaddr().
 decode_ipaddress(<<I0:16, I1:16, I2:16, I3:16, I4:16, I5:16, I6:16, I7:16>>) ->
     {I0, I1, I2, I3, I4, I5, I6, I7}.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-decode_test() ->
-    Binary = <<
-               16#01,                                   % Number of addresses: 1
-                                                        % addr(0):
-               16#E215104D:32,                          %     Timestamp: 2010-12-21 02:50:10 GMT
-               16#0100000000000000:64,                  %     Services:  [node_network]
-               16#00000000000000000000FFFF0A000001:128, %     IP:        10.0.0.1
-               16#208D:16                               %     Port:      8333
-             >>,
-    ExpectedNetAddr = #net_addr{
-                         time     = {{2010, 12, 21}, {2, 50, 10}},
-                         services = [node_network],
-                         ip       = {0, 0, 0, 0, 0, 16#FFFF, 16#0A00, 16#0001},
-                         port     = 8333
-                        },
-    Expected = [ExpectedNetAddr],
-    #addr{addr_list = Result} = ecoin_addr:decode(Binary),
-    Result1 = lists:map(fun (#net_addr{time = T} = N) ->
-                                N#net_addr{
-                                  time = calendar:now_to_universal_time(T)
-                                 }
-                        end, Result),
-    ?assertEqual(Expected, Result1).
-
--endif.

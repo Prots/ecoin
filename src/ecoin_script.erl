@@ -1,9 +1,8 @@
--module(script).
+-module(ecoin_script).
 
 -include("ecoin.hrl").
 
--export([genesis_raw/0,
-         genesis/0,
+-export([genesis/0,
          genesis/1]).
 
 -export([new_env/1,
@@ -29,33 +28,23 @@
 -type item()  :: boolean() | integer() | binary().
 -type items() :: item() | [item()].
 
-%% @doc Return the genesis scripts as binary
--spec genesis_raw() -> {script_raw(), script_raw()}.
-genesis_raw() ->
-    {SigScript, PKScript} = genesis(),
-    {encode(SigScript), encode(PKScript)}.
-
 %% @doc Return the genesis scripts
 -spec genesis() -> {script(), script()}.
 genesis() -> {genesis(sig_script), genesis(pk_script)}.
 
 %% @doc Return the components of the genesis block
--spec genesis(script_enum()) -> script();
-             (psz_timestamp) -> binary();
-             (public_key)    -> public_key().
+-spec genesis(script_enum()) -> script().
 genesis(pk_script) ->
-    [{push, genesis(public_key)}, checksig];
+    PublicKey = <<16#04,
+                  16#678AFDB0FE5548271967F1A67130B710:128, % x 256 bits
+                  16#5CD6A828E03909A67962E0EA1F61DEB6:128,
+                  16#49F6BC3F4CEF38C4F35504E51EC112DE:128, % y 256 bits
+                  16#5C384DF7BA0B8D578A4C702B6BF11D5F:128>>,
+    [{push, PublicKey}, checksig];
 genesis(sig_script) ->
-    [{push, 486604799}, {push, 4}, {push, genesis(psz_timestamp)}];
-genesis(psz_timestamp) ->
-    <<"The Times 03/Jan/2009 Chancellor on"
-      " brink of second bailout for banks">>;
-genesis(public_key) ->
-    <<16#04,
-      16#678AFDB0FE5548271967F1A67130B710:128, % x 256 bits
-      16#5CD6A828E03909A67962E0EA1F61DEB6:128,
-      16#49F6BC3F4CEF38C4F35504E51EC112DE:128, % y 256 bits
-      16#5C384DF7BA0B8D578A4C702B6BF11D5F:128>>.
+    PszTimestamp = <<"The Times 03/Jan/2009 Chancellor on"
+                     " brink of second bailout for banks">>,
+    [{push, 486604799}, {push, 4}, {push, PszTimestamp}].
 
 %% @doc Create an empty env to run a pk_script
 -spec new_env(binary()) -> #env{}.
@@ -559,10 +548,13 @@ encode(Script) -> iolist_to_binary(lists:map(fun encode_op/1, Script)).
 
 %% @doc Encode a script operation
 -spec encode_op(script_operation()) -> iodata().
-encode_op(Bool) when is_boolean(Bool) -> encode_op(encode_bool(Bool));
-encode_op(Int) when is_integer(Int), Int > -1, Int < 16 -> encode_varint(Int);
-encode_op(Bin) when is_binary(Bin), byte_size(Bin) < ?MAX_ELEMENT_SIZE ->
-    encode_pushdata(byte_size(Bin), Bin);
+encode_op(true) -> ?OP_1;
+encode_op(false) -> ?OP_0;
+encode_op(-1) -> ?OP_1NEGATE;
+encode_op(0) -> ?OP_0;
+encode_op(Int) when is_integer(Int), Int > 0, Int < 16 -> ?OP_1 + 1 + Int;
+encode_op({push, Data}) ->
+    encode_pushdata(encode_value(Data));
 encode_op('if') -> ?OP_IF;
 encode_op(notif) -> ?OP_NOTIF;
 encode_op(else) -> ?OP_ELSE;
@@ -639,6 +631,9 @@ encode_op(checkmultisigverify) -> ?OP_CHECKMULTISIGVERIFY.
 
 %% @doc Encode a push data operation into one
 %%      of the available push op codes
+encode_pushdata(Data) when byte_size(Data) < ?MAX_ELEMENT_SIZE ->
+    encode_pushdata(byte_size(Data), Data).
+
 -spec encode_pushdata(uinteger(), binary()) -> binary().
 encode_pushdata(Size, Data) when Size < ?OP_PUSHDATA1 -> <<Size, Data/binary>>;
 encode_pushdata(Size, Data) when Size =< 16#FF ->

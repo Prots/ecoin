@@ -1,4 +1,4 @@
--module(version).
+-module(ecoin_version).
 
 -export([new/1,
          encode/1,
@@ -14,64 +14,54 @@
 %%      the configuration and the state of client(start_height).
 -spec new(#net_addr{}) -> #version{}.
 new(Peer) ->
-    Services = config:services(),
-    #version{
-       version   = config:protocol_version(),
-       services  = Services,
-       timestamp = now(),
-       addr_recv = Peer,
-       addr_from = #net_addr{
-                      services = Services,
-                      ip       = config:ip(),
-                      port     = config:port()
-                     },
-       nounce       = ecoin_util:nounce(4),
-       user_agent   = config:user_agent(),
-       start_height = blockchain:last_block(),
-       relay        = config:relay()
-      }.
+    Services = ecoin_config:services(),
+    #version{version   = ecoin_config:protocol_version(),
+             services  = Services,
+             timestamp = now(),
+             addr_recv = Peer,
+             addr_from = #net_addr{services = Services,
+                                   ip       = ecoin_config:ip(),
+                                   port     = ecoin_config:port()},
+             nounce       = ecoin_util:nounce(4),
+             user_agent   = ecoin_config:user_agent(),
+             start_height = ecoin_blockchain:last_block(),
+             relay        = ecoin_config:relay()}.
 
 %% @doc Encode a version message
--spec encode(#version{}) -> iodata().
-encode(#version{
-          version      = Version,
-          services     = Services,
-          timestamp    = Timestamp,
-          addr_recv    = AddrRecv,
-          addr_from    = AddrFrom,
-          nounce       = Nounce,
-          user_agent   = UserAgent,
-          start_height = StartHeight,
-          relay        = Relay
-         }) ->
+-spec encode(#version{}) -> binary().
+encode(#version{version      = Version,
+                services     = Services,
+                timestamp    = Timestamp,
+                addr_recv    = AddrRecv,
+                addr_from    = AddrFrom,
+                nounce       = Nounce,
+                user_agent   = UserAgent,
+                start_height = StartHeight,
+                relay        = Relay}) ->
     RelayByte = case Relay of
                     true  -> 1;
                     false -> 0
                 end,
-    [
-     <<Version:32/signed-little>>,
-     encode_services(Services),
-     <<(ecoin_util:timestamp_to_integer(Timestamp)):64/signed-little>>,
-     encode_net_addr(AddrRecv),
-     encode_net_addr(AddrFrom),
-     <<Nounce:64/little>>,
-     protocol:encode_varbin(UserAgent),
-     <<StartHeight:32/signed-little>>,
-     RelayByte
-    ].
+    iolist_to_binary([<<Version:32/signed-little>>,
+                      encode_services(Services),
+                      <<(ecoin_util:ts_to_int(Timestamp)):64/signed-little>>,
+                      encode_net_addr(AddrRecv),
+                      encode_net_addr(AddrFrom),
+                      <<Nounce:64/little>>,
+                      ecoin_protocol:encode_varbin(UserAgent),
+                      <<StartHeight:32/signed-little>>,
+                      RelayByte]).
 
 %% @doc Decode a version message
 -spec decode(binary()) -> #version{}.
-decode(Binary) when is_binary(Binary) ->
-    <<
-      Version:32/signed-little,
+decode(Binary) ->
+    <<Version:32/signed-little,
       Services:8/binary,
       Timestamp:64/signed-little,
       AddrRecv:26/binary,
       AddrFrom:26/binary,
-      Nounce:64/little, Binary1/binary
-    >> = Binary,
-    {UserAgent, Binary2} = protocol:decode_varbin(Binary1),
+      Nounce:64/little, Binary1/binary>> = Binary,
+    {UserAgent, Binary2} = ecoin_protocol:decode_varbin(Binary1),
     <<StartHeight:32/signed-little,
       RelayByte/binary>> = Binary2,
     Relay = case RelayByte of
@@ -79,29 +69,27 @@ decode(Binary) when is_binary(Binary) ->
                 <<0>> -> false;
                 <<>>  -> true
             end,
-    #version{
-       version      = Version,
-       services     = decode_services(Services),
-       timestamp    = ecoin_util:integer_to_timestamp(Timestamp),
-       addr_recv    = decode_net_addr(AddrRecv),
-       addr_from    = decode_net_addr(AddrFrom),
-       nounce       = Nounce,
-       user_agent   = UserAgent,
-       start_height = StartHeight,
-       relay        = Relay
-      }.
+    #version{version      = Version,
+             services     = decode_services(Services),
+             timestamp    = ecoin_util:int_to_ts(Timestamp),
+             addr_recv    = decode_net_addr(AddrRecv),
+             addr_from    = decode_net_addr(AddrFrom),
+             nounce       = Nounce,
+             user_agent   = UserAgent,
+             start_height = StartHeight,
+             relay        = Relay}.
 
 %% @doc Special net_addr encode function
 -spec encode_net_addr(#net_addr{}) -> binary().
 encode_net_addr(NetAddr) ->
     NetAddr1 = NetAddr#net_addr{time = {0, 0, 0}},
-    <<_:32, Binary/binary>> = iolist_to_binary(addr:encode_net_addr(NetAddr1)),
+    <<_:32, Binary/binary>> = ecoin_addr:encode_net_addr(NetAddr1),
     Binary.
 
 %% @doc Special net_addr decode function
 -spec decode_net_addr(<<_:240>>) -> #net_addr{}.
 decode_net_addr(Binary) ->
-    {NetAddr, <<>>} = addr:decode_net_addr(<<0:32, Binary/binary>>),
+    NetAddr = ecoin_addr:decode_net_addr(<<0:32, Binary/binary>>),
     NetAddr#net_addr{time = undefined}.
 
 %% @doc All defined services
@@ -117,8 +105,8 @@ service_to_integer(node_network) -> ?SERVICE_NODE_NETWORK.
 encode_services(undefined) ->
     encode_services([]);
 encode_services(Services) ->
-    Int = lists:foldl(fun erlang:'bor'/2, 0,
-                      lists:map(fun service_to_integer/1, Services)),
+    ServiceInts = lists:map(fun service_to_integer/1, Services),
+    Int = lists:foldl(fun erlang:'bor'/2, 0, ServiceInts),
     <<Int:64/little>>.
 
 %% @doc Decode a services field
@@ -126,42 +114,3 @@ encode_services(Services) ->
 decode_services(<<Services:64/little>>) ->
     [Service || Service <- all_services(),
                 ecoin_util:in_mask(service_to_integer(Service), Services)].
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-decode_test() ->
-    Binary = <<
-               16#62EA0000:32,
-               16#0100000000000000:64,
-               16#11B2D05000000000:64,
-               16#010000000000000000000000000000000000FFFF000000000000:26/unit:8,
-               16#010000000000000000000000000000000000FFFF000000000000:26/unit:8,
-               16#3B2EB35D8CE61765:32,
-               16#0F2F5361746F7368693A302E372E322F:16/unit:8,
-               16#C03E0300:32,
-               1
-             >>,
-    NetAddr = #net_addr{
-                 time     = undefined,
-                 services = [node_network],
-                 ip       = {0, 0, 0, 0, 0, 16#FFFF, 0, 0},
-                 port     = 0
-                },
-    Expected = #version{
-                 version      = 60002,
-                 services     = [node_network],
-                 timestamp    = {1355,854353,0},
-                 addr_from    = NetAddr,
-                 addr_recv    = NetAddr,
-                 nounce       = 1696065164,
-                 user_agent   = <<"/Satoshi:0.7.2/">>,
-                 start_height = 212672,
-                 relay        = true
-                 },
-    Res = iolist_to_binary(encode(Expected)),
-    ct:pal("Bin: ~p ~n~nEnc: ~p", [Binary, Res]),
-    ?assertEqual(Expected, decode(Binary)),
-    ?assertEqual(Binary, Res).
-
--endif.

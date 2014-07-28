@@ -39,8 +39,12 @@ decode_list(Binary, Decode) ->
 decode_list(Rest, _Decode, 0, Acc) ->
     empty_rest({lists:reverse(Acc), Rest});
 decode_list(Binary, Decode, Count, Acc) ->
-    {Elem, Binary1} = Decode(Binary),
-    decode_list(Binary1, Decode, Count - 1, [Elem | Acc]).
+    case Decode(Binary) of
+        {Elem, Rest} ->
+            decode_list(Rest, Decode, Count - 1, [Elem | Acc]);
+        Elem when Count == 1 ->
+            lists:reverse([Elem | Acc])
+    end.
 
 %% @doc Encode an array
 -spec encode_array(array(T), fun ((T) -> iodata())) -> binary().
@@ -74,7 +78,7 @@ split_decode(Binary, ChunkSize,  Decode) ->
 %% @doc Encode a variable length integer
 -spec encode_varuint(uinteger()) -> binary().
 encode_varuint(Integer) when Integer < 16#fd ->
-    Integer;
+    <<Integer>>;
 encode_varuint(Integer) when Integer =< 16#ffff ->
     <<16#fd, Integer:16/little>>;
 encode_varuint(Integer) when Integer =< 16#ffffffff ->

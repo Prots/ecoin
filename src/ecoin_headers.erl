@@ -1,4 +1,4 @@
--module(headers).
+-module(ecoin_headers).
 
 -export([encode/1,
          decode/1]).

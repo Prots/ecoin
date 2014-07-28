@@ -1,5 +1,5 @@
 %% @doc Implements hierarchial deterministic wallets (BIPS 0032)
--module(hdw).
+-module(ecoin_hdw).
 
 -export([ckd_priv/2,
          ckd_pub/2,
@@ -53,7 +53,7 @@ ckd_priv(#extended_key{network=Network, type=private, depth=Depth,
          Ix) when ?IX_IN_RANGE(Ix) ->
     Fingerprint = fingerprint(compute_public_key(Key)),
     {PrivateKeyChild, ChainCodeChild} = ckd_priv(Key, ChainCode, Ix),
-    #extended_key{network=Network, type=private, depth=Depth+1, 
+    #extended_key{network=Network, type=private, depth=Depth+1,
                   fingerprint=Fingerprint, child_number=Ix,
                   chain_code=ChainCodeChild, key=PrivateKeyChild}.
 
@@ -174,7 +174,7 @@ unpack_point(<<16#02, X:256>>)        -> {even, X};
 unpack_point(<<16#03, X:256>>)        -> {odd, X};
 unpack_point(<<16#04, X:256, Y:256>>) -> {X, Y}.
 
-%% @doc Point addition 
+%% @doc Point addition
 point_add({X1, Y1}, {X2, Y2}) ->
     Lambda = (Y2 - Y1) div (X2 - X1),
     X3 = Lambda * Lambda - X1 - X2,
