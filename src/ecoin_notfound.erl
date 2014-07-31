@@ -15,5 +15,5 @@ encode(#notfound{inventory = Inventory}) ->
 -spec decode(binary()) -> #notfound{}.
 decode(Binary) ->
     DecodeInvVect = fun ecoin_inv:decode_inv_vect/1,
-    InvArr = protocol:decode_array(Binary, DecodeInvVect),
+    InvArr = ecoin_protocol:decode_array(Binary, DecodeInvVect),
     #notfound{inventory = InvArr}.

@@ -15,4 +15,4 @@ encode(#headers{headers = Headers}) ->
 -spec decode(binary()) -> #headers{}.
 decode(Binary) ->
     DecodeBlock = fun ecoin_block:decode/1,
-    #headers{headers = protocol:decode_array(Binary, DecodeBlock)}.
+    #headers{headers = ecoin_protocol:decode_array(Binary, DecodeBlock)}.

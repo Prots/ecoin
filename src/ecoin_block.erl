@@ -1,6 +1,6 @@
 -module(ecoin_block).
 
--export([new/6,
+-export([new/7,
          genesis/0,
          genesis/1,
          encode/1,
@@ -12,18 +12,23 @@
 -include("ecoin.hrl").
 
 %% @doc Construct a new block
--spec new(uinteger(), hash(), timestamp(), uinteger(), uinteger(), [#tx{}]) ->
-    #block{}.
-new(Version, PrevBlock, Timestamp, Bits, Nounce, Txns) ->
-    HashTx = fun(Tx) -> ecoin_crypto:hash256(ecoin_tx:encode(Tx)) end,
-    MerkleRoot = build_merkle_root(lists:map(HashTx, Txns)),
-    #block{version     = Version,
-           prev_block  = PrevBlock,
-           merkle_root = MerkleRoot,
-           timestamp   = Timestamp,
-           bits        = Bits,
-           nounce      = Nounce,
-           txns        = array:from_list(Txns)}.
+-spec new(uinteger(), uinteger(), hash(), timestamp(), uinteger(), uinteger(),
+          [#tx{}]) -> #block{}.
+new(BlockNr, Version, PrevBlock, Timestamp, Bits, Nounce, Txns) ->
+    Block = #block{nr          = BlockNr,
+                   version     = Version,
+                   prev_block  = PrevBlock,
+                   timestamp   = Timestamp,
+                   bits        = Bits,
+                   nounce      = Nounce,
+                   txns        = array:from_list(Txns)},
+    set_merkle_root(Block).
+
+%% @doc Compute and set the merkle root for a block
+-spec set_merkle_root(#block{}) -> #block{}.
+set_merkle_root(Block = #block{txns = Txns}) ->
+    TxHashes = lists:map(fun (T) -> T#tx.hash end, array:to_list(Txns)),
+    Block#block{merkle_root = build_merkle_root(TxHashes)}.
 
 %% @doc Construct the genesis block in the current network
 -spec genesis() -> #block{}.
@@ -33,13 +38,19 @@ genesis() ->
 %% @doc Construct the genesis block in the given network
 -spec genesis(network()) -> #block{}.
 genesis(main) ->
+    BlockNr   = 1,
     Version   = 1,
     PrevBlock = <<0:32/unit:8>>,
     Timestamp = {1231, 6505, 0},
     Bits      = 16#1D00FFFF,
     Nounce    = 2083236893,
     Txns      = [ecoin_tx:genesis()],
-    new(Version, PrevBlock, Timestamp, Bits, Nounce, Txns).
+    new(BlockNr, Version, PrevBlock, Timestamp, Bits, Nounce, Txns);
+genesis(testnet3) ->
+    Genesis = genesis(main),
+    Genesis1 = Genesis#block{timestamp = {1296, 688602, 0},
+                             nounce    = 414098458},
+    set_merkle_root(Genesis1).
 
 %% @doc Hash the block header to determine the block hash
 -spec hash(#block{}) -> hash().

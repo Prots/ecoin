@@ -130,6 +130,8 @@
          }).
 
 -record(tx, {
+          hash      :: hash(),
+          block_nr  :: uinteger() | undefined,
           version   :: uinteger(),
           tx_in     :: array(#tx_in{}),
           tx_out    :: array(#tx_out{}),
@@ -137,13 +139,14 @@
          }).
 
 -record(block, {
+          nr          :: uinteger() | orphan,
           version     :: uinteger(),
           prev_block  :: hash(),
           merkle_root :: hash(),
           timestamp   :: timestamp(),
           bits        :: uinteger(),
           nounce      :: uinteger(),
-          txns        :: array(#tx{})
+          txns        :: array(#tx{}) | array(hash())
          }).
 
 -record(headers, {headers :: array(#block{})}).

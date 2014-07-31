@@ -17,4 +17,4 @@ fi
 
 echo "Starting ecoin with configuration: $config_name"
 
-erl -pz ebin/ deps/*/ebin/ -config $config -s ecoin start
+erl -pz ebin/ deps/*/ebin/ -config $config -s ecoin start -mnesia dir \'"priv/db/$config_name"\'

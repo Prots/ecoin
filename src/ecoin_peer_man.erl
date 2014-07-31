@@ -125,6 +125,6 @@ code_change(_, State, _) ->
 %%      connection table
 -spec new_peer(#net_addr{}) -> true.
 new_peer(Peer) ->
-    {ok, Pid} = peer_sup:new_peer(Peer),
+    {ok, Pid} = ecoin_peer_sup:new_peer(Peer),
     monitor(process, Pid),
     ets:insert_new(?CONN_TAB, {Pid, connecting, Peer, now()}).

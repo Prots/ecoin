@@ -48,12 +48,12 @@ get_external_ip() ->
 %%      from the configuration.
 -spec dns_peers() -> [address()].
 dns_peers() ->
-    dns_peers(config:dns(), config:dns_limit()).
+    dns_peers(ecoin_config:dns(), ecoin_config:dns_limit()).
 
 %% @doc Same as above but with explicit parameters.
 -spec dns_peers([hostaddr()] | hostaddr(), non_neg_integer()) -> [address()].
 dns_peers(DNSs, DNSLimit) when is_list(DNSs) ->
-        Port = config:default_port(),
+        Port = ecoin_config:default_port(),
         AccDNS = fun (_DNS, {Acc, 0}) ->
                          {Acc, 0};
                      (DNS, {Acc, Left}) ->

@@ -13,13 +13,13 @@
 -spec encode(#inv{}) -> binary().
 encode(#inv{inventory = Inventory}) ->
     EncodeInvVect = fun encode_inv_vect/1,
-    protocol:encode_array(Inventory, EncodeInvVect).
+    ecoin_protocol:encode_array(Inventory, EncodeInvVect).
 
 %% @doc Decode an inv message
 -spec decode(binary()) -> #inv{}.
 decode(Binary) ->
     DecodeInvVect = fun decode_inv_vect/1,
-    Inventory = protocol:decode_array(Binary, DecodeInvVect),
+    Inventory = ecoin_protocol:decode_array(Binary, DecodeInvVect),
     #inv{inventory = Inventory}.
 
 %% @doc Encode an inv_vect structure

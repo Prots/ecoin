@@ -25,10 +25,15 @@ genesis() ->
                                    sequence        = 16#FFFFFFFF}]),
     TxOut = array:from_list([#tx_out{value     = 5000000000,
                                      pk_script = PKScriptBin}]),
-    #tx{version   = 1,
-        tx_in     = TxIn,
-        tx_out    = TxOut,
-        lock_time = 0}.
+    set_hash(#tx{version   = 1,
+                 tx_in     = TxIn,
+                 tx_out    = TxOut,
+                 lock_time = 0}).
+
+%% @doc Set the hash attribute of a newly created tx
+-spec set_hash(#tx{}) -> #tx{}.
+set_hash(Tx) ->
+    Tx#tx{hash = ecoin_crypto:hash256(encode(Tx))}.
 
 %% @doc Encode a tx message
 -spec encode(#tx{}) -> iodata().
@@ -58,7 +63,7 @@ decode(<<Version:32/little, Binary/binary>>) ->
              tx_in     = TxIn,
              tx_out    = TxOut,
              lock_time = LockTime},
-    ecoin_protocol:empty_rest({Tx, Rest}).
+    ecoin_protocol:empty_rest({set_hash(Tx), Rest}).
 
 %% @doc Encode a tx_in structure
 -spec encode_tx_in(#tx_in{}) -> binary().

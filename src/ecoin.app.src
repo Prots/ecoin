@@ -22,9 +22,13 @@
         ]},
         {exometer_predefined, [
             {[messages, in,  num],
-             {function, exometer, aggregate, [ [{{[messages, in,  num, '_'], counter, '_'}, [], [true]}], [value] ], value, [value]}, []},
+             {function, exometer, aggregate,
+                 [[{{[messages, in,  num, '_'], counter, '_'}, [], [true]}], [value]],
+                 value, [value]}, []},
             {[messages, out, num],
-             {function, exometer, aggregate, [ [{{[messages, out, num, '_'], counter, '_'}, [], [true]}], [value] ], value, [value]}, []}
+             {function, exometer, aggregate,
+                 [[{{[messages, out, num, '_'], counter, '_'}, [], [true]}], [value]],
+                 value, [value]}, []}
         ]}
     ]}
 ]}.
